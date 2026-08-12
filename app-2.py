@@ -12,7 +12,7 @@ INTERVAL = "1m"
 st.set_page_config(page_title="Angel King Crypto AI Trader V2", page_icon="👑", layout="wide")
 
 def get_klines(limit=1000):
-    r = requests.get("https://api.binance.com/api/v3/klines",
+    r = requests.get("https://api.binance.us/api/v3/klines",
                      params={"symbol": SYMBOL, "interval": INTERVAL, "limit": limit}, timeout=15)
     r.raise_for_status()
     x = r.json()
