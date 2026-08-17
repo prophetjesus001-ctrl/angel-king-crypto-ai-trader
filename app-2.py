@@ -1,15 +1,13 @@
 import time
+import requests
 import numpy as np
 import pandas as pd
-import requests
 import streamlit as st
 import plotly.graph_objects as go
 
-
 # ============================================================
-# ANGEL KING CRYPTO AI TRADER V3
-# Binance market data • 1-minute scalping
-# Trading execution intentionally OFF
+# 👑 ANGEL KING CRYPTO AI TRADER V3
+# Binance market data • 1-minute scalping • Trading OFF
 # ============================================================
 
 st.set_page_config(
@@ -18,37 +16,20 @@ st.set_page_config(
     layout="wide"
 )
 
-
 # ============================================================
-# DEFAULT SETTINGS
+# CONFIGURATION
 # ============================================================
 
+BINANCE_BASE = "https://api.binance.us"
 INTERVAL = "1m"
 
-MARKETS = [
-    "BTC/USDT",
-    "ETH/USDT",
-    "BNB/USDT",
-    "SOL/USDT",
-    "XRP/USDT",
-    "DOGE/USDT",
-    "ADA/USDT",
-    "TRX/USDT",
-    "AVAX/USDT",
-    "LINK/USDT"
-]
-
-
 # ============================================================
-# BINANCE DATA
+# BINANCE MARKET DATA
 # ============================================================
 
-def get_symbol(market):
-    return market.replace("/", "")
-
-
-def get_klines(symbol, limit=300):
-    url = "https://api.binance.com/api/v3/klines"
+@st.cache_data(ttl=4)
+def get_klines(symbol="BTCUSDT", limit=300):
+    url = f"{BINANCE_BASE}/api/v3/klines"
 
     params = {
         "symbol": symbol,
@@ -59,26 +40,31 @@ def get_klines(symbol, limit=300):
     r = requests.get(
         url,
         params=params,
-        timeout=15
+        timeout=10
     )
 
     r.raise_for_status()
 
     data = r.json()
 
-    return pd.DataFrame(
+    if not data:
+        raise ValueError("Binance returned no market data.")
+
+    df = pd.DataFrame(
         [
             {
-                "time": pd.to_datetime(a[0], unit="ms"),
-                "open": float(a[1]),
-                "high": float(a[2]),
-                "low": float(a[3]),
-                "close": float(a[4]),
-                "volume": float(a[5])
+                "time": pd.to_datetime(x[0], unit="ms"),
+                "open": float(x[1]),
+                "high": float(x[2]),
+                "low": float(x[3]),
+                "close": float(x[4]),
+                "volume": float(x[5])
             }
-            for a in data
+            for x in data
         ]
     )
+
+    return df
 
 
 # ============================================================
@@ -104,342 +90,346 @@ def indicators(df):
     # RSI 14
     delta = d["close"].diff()
 
-    gain = delta.clip(
-        lower=0
-    ).rolling(14).mean()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
 
-    loss = (
-        -delta.clip(upper=0)
-    ).rolling(14).mean()
+    rs = gain / loss.replace(0, np.nan)
 
-    rs = gain / loss.replace(
-        0,
-        np.nan
-    )
-
-    d["rsi"] = 100 - (
-        100 / (1 + rs)
-    )
+    d["rsi"] = 100 - (100 / (1 + rs))
 
     # ATR 14
+    previous_close = d["close"].shift(1)
+
     tr = pd.concat(
         [
             d["high"] - d["low"],
-            (d["high"] - d["close"].shift()).abs(),
-            (d["low"] - d["close"].shift()).abs()
+            (d["high"] - previous_close).abs(),
+            (d["low"] - previous_close).abs()
         ],
         axis=1
     ).max(axis=1)
 
     d["atr"] = tr.rolling(14).mean()
 
-    # Candle information
-    d["body"] = (
-        d["close"] - d["open"]
-    ).abs()
+    # Candle direction
+    d["green"] = d["close"] > d["open"]
+    d["red"] = d["close"] < d["open"]
 
-    d["range"] = (
-        d["high"] - d["low"]
-    )
-
-    d["body_ratio"] = np.where(
-        d["range"] > 0,
-        d["body"] / d["range"],
-        0
-    )
-
-    d["bull_candle"] = (
-        (d["close"] > d["open"]) &
-        (d["body_ratio"] >= 0.55)
-    )
-
-    d["bear_candle"] = (
-        (d["close"] < d["open"]) &
-        (d["body_ratio"] >= 0.55)
-    )
+    # Recent candle counts
+    d["green_count"] = d["green"].rolling(10).sum()
+    d["red_count"] = d["red"].rolling(10).sum()
 
     return d
 
 
 # ============================================================
-# EXISTING SIGNAL ENGINE
+# SIGNAL ENGINE
 # ============================================================
 
-def classify(row, prev):
+def classify(row, previous=None):
 
     bull = 0
     bear = 0
-
     reasons = []
 
+    price = row.close
+    ema9 = row.ema9
+    ema21 = row.ema21
+    rsi = row.rsi
+
     # --------------------------------------------------------
-    # TREND
+    # EMA TREND
     # --------------------------------------------------------
 
-    if row.close > row.ema9 > row.ema21:
+    if price > ema9 > ema21:
+        bull += 2
+        reasons.append("price above EMA9/EMA21")
 
-        bull += 1
-        reasons.append(
-            "price above EMA9 and EMA21"
-        )
-
-    elif row.close < row.ema9 < row.ema21:
-
-        bear += 1
-        reasons.append(
-            "price below EMA9 and EMA21"
-        )
+    elif price < ema9 < ema21:
+        bear += 2
+        reasons.append("price below EMA9/EMA21")
 
     # --------------------------------------------------------
     # EMA DIRECTION
     # --------------------------------------------------------
 
-    if prev is not None:
+    if previous is not None:
 
-        if (
-            row.ema9 > prev.ema9 and
-            row.ema21 > prev.ema21
-        ):
-
+        if row.ema9 > previous.ema9:
             bull += 1
-            reasons.append(
-                "EMA direction bullish"
-            )
+            reasons.append("EMA9 rising")
 
-        elif (
-            row.ema9 < prev.ema9 and
-            row.ema21 < prev.ema21
-        ):
-
+        elif row.ema9 < previous.ema9:
             bear += 1
-            reasons.append(
-                "EMA direction bearish"
-            )
+            reasons.append("EMA9 falling")
+
+        if row.ema21 > previous.ema21:
+            bull += 1
+
+        elif row.ema21 < previous.ema21:
+            bear += 1
 
     # --------------------------------------------------------
     # RSI
     # --------------------------------------------------------
 
-    if 52 <= row.rsi <= 68:
-
+    if 50 <= rsi <= 70:
         bull += 1
-        reasons.append(
-            "RSI supports bullish momentum"
-        )
+        reasons.append("RSI bullish zone")
 
-    elif 32 <= row.rsi <= 48:
-
+    elif 30 <= rsi < 50:
         bear += 1
-        reasons.append(
-            "RSI supports bearish momentum"
-        )
+        reasons.append("RSI bearish zone")
 
     # --------------------------------------------------------
-    # CANDLE COLOR + STRENGTH
+    # CANDLE MOMENTUM
     # --------------------------------------------------------
 
-    if row.bull_candle:
-
+    if row.green:
         bull += 1
-        reasons.append(
-            "strong bullish candle"
-        )
 
-    elif row.bear_candle:
-
+    elif row.red:
         bear += 1
-        reasons.append(
-            "strong bearish candle"
-        )
+
+    # --------------------------------------------------------
+    # RECENT CANDLE PRESSURE
+    # --------------------------------------------------------
+
+    green_count = row.green_count
+    red_count = row.red_count
+
+    if pd.notna(green_count) and pd.notna(red_count):
+
+        if green_count > red_count + 2:
+            bull += 1
+            reasons.append("green candle pressure")
+
+        elif red_count > green_count + 2:
+            bear += 1
+            reasons.append("red candle pressure")
 
     # --------------------------------------------------------
     # FINAL SIGNAL
     # --------------------------------------------------------
 
-    if bull >= 3 and bull > bear:
+    total = bull + bear
 
+    if bull >= 5 and bull > bear:
         signal = "BUY"
 
         confidence = min(
             95,
-            55 + 10 * bull
+            50 + (bull - bear) * 8
         )
 
-        reason = "; ".join(reasons)
+        reason = ", ".join(reasons[:4]) if reasons else "Bullish conditions"
 
-    elif bear >= 3 and bear > bull:
-
+    elif bear >= 5 and bear > bull:
         signal = "SELL"
 
         confidence = min(
             95,
-            55 + 10 * bear
+            50 + (bear - bull) * 8
         )
 
-        reason = "; ".join(reasons)
+        reason = ", ".join(reasons[:4]) if reasons else "Bearish conditions"
 
     else:
-
         signal = "WAIT"
-
         confidence = 50
-
         reason = "Mixed conditions"
 
-    return signal, confidence, reason, bull, bear
+    return signal, confidence, reason
 
 
 # ============================================================
-# ANALYZE MARKET
+# SIGNAL DISPLAY
 # ============================================================
 
-def analyze_market(df):
-
-    d = indicators(df)
-
-    if len(d) < 3:
-
-        return (
-            d,
-            "WAIT",
-            0,
-            "Collecting data",
-            0,
-            0
-        )
-
-    row = d.iloc[-1]
-
-    prev = d.iloc[-2]
-
-    signal, confidence, reason, bull, bear = classify(
-        row,
-        prev
-    )
-
-    return (
-        d,
-        signal,
-        confidence,
-        reason,
-        bull,
-        bear
-    )
-
-
-# ============================================================
-# TOP SIGNAL INDICATOR
-# ONLY UI CHANGE REQUESTED
-# ============================================================
-
-def show_top_signal(signal):
+def show_signal(signal, confidence, reason):
 
     if signal == "BUY":
 
+        st.success(
+            f"🟢 BUY  •  Confidence: {confidence:.0f}%"
+        )
+
         st.markdown(
+            f"""
+            **Signal:** 🟢 BUY
+
+            **Reason:** {reason}
             """
-            <div style="
-                background:#d9f7df;
-                border-left:7px solid #16a34a;
-                border-radius:14px;
-                padding:16px 20px;
-                margin:10px 0 18px 0;
-                color:#15803d;
-                font-size:27px;
-                font-weight:700;
-            ">
-                🟢 BUY
-            </div>
-            """,
-            unsafe_allow_html=True
         )
 
     elif signal == "SELL":
 
+        st.error(
+            f"🔴 SELL  •  Confidence: {confidence:.0f}%"
+        )
+
         st.markdown(
+            f"""
+            **Signal:** 🔴 SELL
+
+            **Reason:** {reason}
             """
-            <div style="
-                background:#ffe0e0;
-                border-left:7px solid #dc2626;
-                border-radius:14px;
-                padding:16px 20px;
-                margin:10px 0 18px 0;
-                color:#b91c1c;
-                font-size:27px;
-                font-weight:700;
-            ">
-                🔴 SELL
-            </div>
-            """,
-            unsafe_allow_html=True
         )
 
     else:
 
+        st.warning(
+            f"🟡 WAIT  •  Confidence: {confidence:.0f}%"
+        )
+
         st.markdown(
+            f"""
+            **Signal:** 🟡 WAIT
+
+            **Reason:** {reason}
             """
-            <div style="
-                background:#fff9c4;
-                border-left:7px solid #eab308;
-                border-radius:14px;
-                padding:16px 20px;
-                margin:10px 0 18px 0;
-                color:#a16207;
-                font-size:27px;
-                font-weight:700;
-            ">
-                🟡 WAIT
-            </div>
-            """,
-            unsafe_allow_html=True
         )
 
 
 # ============================================================
-# CHART
+# TITLE
 # ============================================================
 
-def show_chart(df, market):
+st.markdown(
+    """
+    # 👑 Angel King Crypto AI Trader V3
+
+    **Binance market data • 1-minute scalping • live signal dashboard • trading OFF**
+    """
+)
+
+# ============================================================
+# LIVE MARKET SECTION
+# ============================================================
+
+st.markdown("### 📊 Binance Market")
+
+assets = {
+    "BTC/USDT": "BTCUSDT",
+    "ETH/USDT": "ETHUSDT",
+    "BNB/USDT": "BNBUSDT",
+    "SOL/USDT": "SOLUSDT",
+    "XRP/USDT": "XRPUSDT",
+    "DOGE/USDT": "DOGEUSDT",
+    "ADA/USDT": "ADAUSDT",
+    "AVAX/USDT": "AVAXUSDT",
+    "LINK/USDT": "LINKUSDT",
+    "LTC/USDT": "LTCUSDT"
+}
+
+selected_asset = st.selectbox(
+    "Market",
+    list(assets.keys()),
+    index=0
+)
+
+SYMBOL = assets[selected_asset]
+
+# ============================================================
+# AUTO REFRESH AREA
+# ============================================================
+
+try:
+
+    df = get_klines(
+        symbol=SYMBOL,
+        limit=300
+    )
+
+    d = indicators(df)
+
+    latest = d.iloc[-1]
+    previous = d.iloc[-2]
+
+    signal, confidence, reason = classify(
+        latest,
+        previous
+    )
+
+    # ========================================================
+    # TOP SIGNAL INDICATOR
+    # ========================================================
+
+    st.markdown("---")
+
+    show_signal(
+        signal,
+        confidence,
+        reason
+    )
+
+    st.markdown("---")
+
+    # ========================================================
+    # PRICE INFORMATION
+    # ========================================================
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.metric(
+            selected_asset,
+            f"${latest.close:,.2f}"
+        )
+
+    with c2:
+        st.metric(
+            "Signal",
+            signal
+        )
+
+    with c3:
+        st.metric(
+            "Confidence",
+            f"{confidence:.0f}%"
+        )
+
+    # ========================================================
+    # CHART
+    # ========================================================
+
+    st.subheader(
+        f"{selected_asset} • 1-minute chart"
+    )
 
     fig = go.Figure()
 
     fig.add_trace(
         go.Candlestick(
-            x=df["time"],
-            open=df["open"],
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
-            name=market
+            x=d["time"],
+            open=d["open"],
+            high=d["high"],
+            low=d["low"],
+            close=d["close"],
+            name="Price"
         )
     )
 
     fig.add_trace(
         go.Scatter(
-            x=df["time"],
-            y=df["ema9"],
-            name="EMA 9",
-            mode="lines"
+            x=d["time"],
+            y=d["ema9"],
+            mode="lines",
+            name="EMA 9"
         )
     )
 
     fig.add_trace(
         go.Scatter(
-            x=df["time"],
-            y=df["ema21"],
-            name="EMA 21",
-            mode="lines"
+            x=d["time"],
+            y=d["ema21"],
+            mode="lines",
+            name="EMA 21"
         )
     )
 
     fig.update_layout(
-        height=480,
-        margin=dict(
-            l=10,
-            r=10,
-            t=30,
-            b=10
-        ),
+        height=500,
         xaxis_rangeslider_visible=False
     )
 
@@ -448,120 +438,44 @@ def show_chart(df, market):
         use_container_width=True
     )
 
+    # ========================================================
+    # SIGNAL DETAILS
+    # ========================================================
 
-# ============================================================
-# BACKTEST ENGINE
-# ============================================================
+    st.markdown(
+        f"""
+        **Reason:** {reason}
 
-def backtest(df, fee=0.10, slippage=0.02, rr=2.0):
+        **RSI:** {latest.rsi:.2f}
 
-    d = indicators(df)
+        **EMA 9:** {latest.ema9:.2f}
 
-    trades = []
-
-    for i in range(2, len(d) - 1):
-
-        row = d.iloc[i]
-        prev = d.iloc[i - 1]
-
-        signal, confidence, reason, bull, bear = classify(
-            row,
-            prev
-        )
-
-        if signal not in ["BUY", "SELL"]:
-            continue
-
-        entry = float(
-            d.iloc[i + 1]["open"]
-        )
-
-        next_close = float(
-            d.iloc[i + 1]["close"]
-        )
-
-        gross_return = (
-            (next_close - entry) / entry
-        ) * 100
-
-        if signal == "SELL":
-
-            gross_return = -gross_return
-
-        net_return = (
-            gross_return
-            - (fee * 2)
-            - (slippage * 2)
-        )
-
-        outcome = (
-            "WIN"
-            if net_return > 0
-            else "LOSS"
-        )
-
-        trades.append(
-            {
-                "time": d.iloc[i + 1]["time"],
-                "signal": signal,
-                "confidence": confidence,
-                "entry": entry,
-                "close": next_close,
-                "return_pct": net_return,
-                "outcome": outcome,
-                "reason": reason
-            }
-        )
-
-    return pd.DataFrame(trades)
-
-
-# ============================================================
-# APP
-# ============================================================
-
-st.title(
-    "👑 Angel King Crypto AI Trader V3"
-)
-
-st.caption(
-    "Binance market data • 1-minute scalping • "
-    "live signal dashboard • trading OFF"
-)
-
-
-# ============================================================
-# MARKET SELECTION
-# ============================================================
-
-market = st.selectbox(
-    "📊 Binance Market",
-    MARKETS,
-    index=0
-)
-
-symbol = get_symbol(market)
-
-
-# ============================================================
-# LIVE DATA
-# ============================================================
-
-try:
-
-    hist = get_klines(
-        symbol,
-        300
+        **EMA 21:** {latest.ema21:.2f}
+        """
     )
 
-    (
-        data,
-        signal,
-        confidence,
-        reason,
-        bull,
-        bear
-    ) = analyze_market(hist)
+    # ========================================================
+    # TRADING STATUS
+    # ========================================================
+
+    st.info(
+        "Execution is OFF. This app does not place Binance trades."
+    )
+
+    st.caption(
+        "🔄 Live Binance market data refreshes automatically every 5 seconds."
+    )
+
+    st.caption(
+        "⚠️ Experimental software. Backtests are not guarantees of future "
+        "performance. Do not use real funds based solely on these signals."
+    )
+
+except requests.exceptions.HTTPError as e:
+
+    st.error(
+        f"Unable to retrieve Binance market data: {e}"
+    )
 
 except Exception as e:
 
@@ -569,331 +483,11 @@ except Exception as e:
         f"Unable to retrieve Binance market data: {e}"
     )
 
-    st.stop()
-
-
-# ============================================================
-# TOP SIGNAL
-# ============================================================
-
-show_top_signal(signal)
-
-
-# ============================================================
-# CURRENT MARKET INFORMATION
-# ============================================================
-
-current_price = float(
-    data.iloc[-1]["close"]
-)
-
-st.subheader(market)
-
-st.metric(
-    "Price",
-    f"${current_price:,.2f}"
-)
-
-
-# ============================================================
-# SIGNAL INFORMATION
-# ============================================================
-
-c1, c2 = st.columns(2)
-
-with c1:
-
-    st.metric(
-        "Signal",
-        signal
-    )
-
-with c2:
-
-    st.metric(
-        "Confidence",
-        f"{confidence:.0f}%"
-    )
-
-
-# ============================================================
-# SIGNAL REASON
-# ============================================================
-
-if signal == "BUY":
-
-    st.success(
-        f"Reason: {reason}"
-    )
-
-elif signal == "SELL":
-
-    st.error(
-        f"Reason: {reason}"
-    )
-
-else:
-
-    st.warning(
-        f"Reason: {reason}"
-    )
-
-
-# ============================================================
-# EXECUTION OFF
-# ============================================================
-
-st.info(
-    "Execution is OFF. This app does not place Binance trades."
-)
-
-
-# ============================================================
-# CHART
-# ============================================================
-
-show_chart(
-    data.tail(100),
-    market
-)
-
-
-# ============================================================
-# AUTO REFRESH
-# ============================================================
-
-st.caption(
-    "🔄 Live Binance market data refreshes automatically "
-    "every 5 seconds."
-)
-
-
-# ============================================================
-# BACKTEST
-# ============================================================
-
-st.divider()
-
-tab1, tab2 = st.tabs(
-    [
-        "📡 Live Signal",
-        "🧪 Backtest"
-    ]
-)
-
-
-with tab1:
-
-    st.subheader(
-        f"Live {market} 1-minute signal"
-    )
-
-    st.write(
-        f"Current signal: **{signal}**"
-    )
-
-    st.write(
-        f"Confidence: **{confidence:.0f}%**"
-    )
-
-    st.write(
-        f"Reason: **{reason}**"
-    )
-
-
-with tab2:
-
-    st.subheader(
-        f"Historical {market} 1-minute test"
-    )
-
-    n = st.slider(
-        "Candles to test",
-        200,
-        1000,
-        1000
-    )
-
-    fee = st.number_input(
-        "Fee per side (%)",
-        min_value=0.0,
-        value=0.10,
-        step=0.01
-    )
-
-    slippage = st.number_input(
-        "Slippage per side (%)",
-        min_value=0.0,
-        value=0.02,
-        step=0.01
-    )
-
-    rr = st.select_slider(
-        "Risk/Reward",
-        options=[
-            1.0,
-            1.5,
-            2.0,
-            2.5,
-            3.0
-        ],
-        value=2.0
-    )
-
-    if st.button(
-        "Run backtest",
-        type="primary"
-    ):
-
-        with st.spinner(
-            "Downloading and testing historical data..."
-        ):
-
-            try:
-
-                hist = get_klines(
-                    symbol,
-                    n
-                )
-
-                trades = backtest(
-                    hist,
-                    fee,
-                    slippage,
-                    rr
-                )
-
-            except Exception as e:
-
-                st.error(
-                    f"Backtest error: {e}"
-                )
-
-                st.stop()
-
-        if trades.empty:
-
-            st.warning(
-                "No qualifying trades found."
-            )
-
-        else:
-
-            wins = (
-                trades["outcome"] == "WIN"
-            ).sum()
-
-            losses = (
-                trades["outcome"] == "LOSS"
-            ).sum()
-
-            winrate = (
-                wins / len(trades) * 100
-            )
-
-            gross_win = trades.loc[
-                trades["return_pct"] > 0,
-                "return_pct"
-            ].sum()
-
-            gross_loss = abs(
-                trades.loc[
-                    trades["return_pct"] < 0,
-                    "return_pct"
-                ].sum()
-            )
-
-            profit_factor = (
-                gross_win / gross_loss
-                if gross_loss > 0
-                else np.inf
-            )
-
-            net_return = (
-                trades["return_pct"].sum()
-            )
-
-            equity = (
-                trades["return_pct"]
-                .cumsum()
-            )
-
-            drawdown = (
-                equity -
-                equity.cummax()
-            )
-
-            max_drawdown = drawdown.min()
-
-            a, b, c, d = st.columns(4)
-
-            a.metric(
-                "Trades",
-                len(trades)
-            )
-
-            b.metric(
-                "Win rate",
-                f"{winrate:.1f}%"
-            )
-
-            c.metric(
-                "Net return",
-                f"{net_return:.2f}%"
-            )
-
-            d.metric(
-                "Profit factor",
-                "∞"
-                if np.isinf(profit_factor)
-                else f"{profit_factor:.2f}"
-            )
-
-            st.metric(
-                "Max drawdown",
-                f"{max_drawdown:.2f}%"
-            )
-
-            chart = go.Figure()
-
-            chart.add_trace(
-                go.Scatter(
-                    x=trades["time"],
-                    y=equity,
-                    mode="lines",
-                    name="Equity"
-                )
-            )
-
-            chart.update_layout(
-                height=400
-            )
-
-            st.plotly_chart(
-                chart,
-                use_container_width=True
-            )
-
-            st.dataframe(
-                trades.tail(100),
-                use_container_width=True
-            )
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.caption(
-    "⚠️ Experimental software. Backtests are not guarantees "
-    "of future performance. Do not use real funds based "
-    "solely on these signals."
-)
-
 
 # ============================================================
 # AUTOMATIC 5-SECOND REFRESH
 # ============================================================
 
 time.sleep(5)
+
 st.rerun()
