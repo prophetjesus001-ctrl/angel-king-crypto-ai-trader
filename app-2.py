@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 # ============================================================
 # 👑 ANGEL KING CRYPTO AI TRADER V3
 # Binance market data • 1-minute scalping • Trading OFF
+# EXISTING SIGNAL ENGINE LOCKED
 # ============================================================
 
 st.set_page_config(
@@ -29,6 +30,7 @@ INTERVAL = "1m"
 
 @st.cache_data(ttl=4)
 def get_klines(symbol="BTCUSDT", limit=300):
+
     url = f"{BINANCE_BASE}/api/v3/klines"
 
     params = {
@@ -123,7 +125,8 @@ def indicators(df):
 
 
 # ============================================================
-# SIGNAL ENGINE
+# ORIGINAL SIGNAL ENGINE
+# DO NOT CHANGE
 # ============================================================
 
 def classify(row, previous=None):
@@ -215,6 +218,7 @@ def classify(row, previous=None):
     total = bull + bear
 
     if bull >= 5 and bull > bear:
+
         signal = "BUY"
 
         confidence = min(
@@ -222,9 +226,12 @@ def classify(row, previous=None):
             50 + (bull - bear) * 8
         )
 
-        reason = ", ".join(reasons[:4]) if reasons else "Bullish conditions"
+        reason = ", ".join(
+            reasons[:4]
+        ) if reasons else "Bullish conditions"
 
     elif bear >= 5 and bear > bull:
+
         signal = "SELL"
 
         confidence = min(
@@ -232,14 +239,186 @@ def classify(row, previous=None):
             50 + (bear - bull) * 8
         )
 
-        reason = ", ".join(reasons[:4]) if reasons else "Bearish conditions"
+        reason = ", ".join(
+            reasons[:4]
+        ) if reasons else "Bearish conditions"
 
     else:
+
         signal = "WAIT"
         confidence = 50
         reason = "Mixed conditions"
 
     return signal, confidence, reason
+
+
+# ============================================================
+# 🆕 MARKET POWER INDICATOR
+# SEPARATE FROM ORIGINAL SIGNAL ENGINE
+# ============================================================
+
+def market_power_indicator(d, signal):
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # If the original engine says WAIT,
+    # Market Power stays completely blank.
+    # --------------------------------------------------------
+
+    if signal == "WAIT":
+        return "", "blank"
+
+    # We examine recent completed candles.
+    recent = d.iloc[-8:].copy()
+
+    if len(recent) < 8:
+        return "", "blank"
+
+    closes = recent["close"].values
+    ema9 = recent["ema9"].values
+    ema21 = recent["ema21"].values
+
+    # Count directional candle movement
+    up_candles = sum(
+        recent["close"] > recent["open"]
+    )
+
+    down_candles = sum(
+        recent["close"] < recent["open"]
+    )
+
+    # Overall price movement
+    price_change = closes[-1] - closes[0]
+
+    # EMA movement
+    ema9_change = ema9[-1] - ema9[0]
+    ema21_change = ema21[-1] - ema21[0]
+
+    # --------------------------------------------------------
+    # DOWNWARD POWER
+    # --------------------------------------------------------
+
+    down_power = (
+        down_candles >= 5
+        and price_change < 0
+        and ema9_change < 0
+        and ema21_change <= 0
+        and ema9[-1] < ema21[-1]
+    )
+
+    # --------------------------------------------------------
+    # UPWARD POWER
+    # --------------------------------------------------------
+
+    up_power = (
+        up_candles >= 5
+        and price_change > 0
+        and ema9_change > 0
+        and ema21_change >= 0
+        and ema9[-1] > ema21[-1]
+    )
+
+    # --------------------------------------------------------
+    # REVERSAL DETECTION
+    # --------------------------------------------------------
+
+    # Downtrend weakening and upward movement beginning
+    upward_reversal = (
+        down_candles >= 3
+        and up_candles >= 3
+        and price_change > 0
+        and ema9_change > 0
+    )
+
+    # Uptrend weakening and downward movement beginning
+    downward_reversal = (
+        up_candles >= 3
+        and down_candles >= 3
+        and price_change < 0
+        and ema9_change < 0
+    )
+
+    # --------------------------------------------------------
+    # FINAL MARKET POWER STATE
+    # --------------------------------------------------------
+
+    if signal == "SELL":
+
+        if upward_reversal:
+
+            return (
+                "🟡 MARKET REVERSING — UPWARD",
+                "reversing_up"
+            )
+
+        if down_power:
+
+            return (
+                "🔴 MARKET POWER DOWN — CONSISTENT",
+                "down"
+            )
+
+        return (
+            "🔴 MARKET POWER DOWN",
+            "down"
+        )
+
+    if signal == "BUY":
+
+        if downward_reversal:
+
+            return (
+                "🟡 MARKET REVERSING — DOWNWARD",
+                "reversing_down"
+            )
+
+        if up_power:
+
+            return (
+                "🟢 MARKET POWER UP — CONSISTENT",
+                "up"
+            )
+
+        return (
+            "🟢 MARKET POWER UP",
+            "up"
+        )
+
+    return "", "blank"
+
+
+# ============================================================
+# MARKET POWER DISPLAY
+# ============================================================
+
+def show_market_power(text, state):
+
+    if state == "blank":
+        return
+
+    if state == "down":
+
+        st.error(
+            f"### {text}"
+        )
+
+    elif state == "up":
+
+        st.success(
+            f"### {text}"
+        )
+
+    elif state == "reversing_up":
+
+        st.warning(
+            f"### {text}"
+        )
+
+    elif state == "reversing_down":
+
+        st.warning(
+            f"### {text}"
+        )
 
 
 # ============================================================
@@ -303,6 +482,7 @@ st.markdown(
     """
 )
 
+
 # ============================================================
 # LIVE MARKET SECTION
 # ============================================================
@@ -330,8 +510,9 @@ selected_asset = st.selectbox(
 
 SYMBOL = assets[selected_asset]
 
+
 # ============================================================
-# AUTO REFRESH AREA
+# LIVE DATA + SIGNAL PROCESSING
 # ============================================================
 
 try:
@@ -346,16 +527,40 @@ try:
     latest = d.iloc[-1]
     previous = d.iloc[-2]
 
+    # ========================================================
+    # ORIGINAL V3 ENGINE
+    # ========================================================
+
     signal, confidence, reason = classify(
         latest,
         previous
     )
 
     # ========================================================
-    # TOP SIGNAL INDICATOR
+    # 🆕 MARKET POWER INDICATOR
+    # ========================================================
+
+    market_power_text, market_power_state = (
+        market_power_indicator(
+            d,
+            signal
+        )
+    )
+
+    # ========================================================
+    # FRONT / TOP MARKET POWER BOX
     # ========================================================
 
     st.markdown("---")
+
+    show_market_power(
+        market_power_text,
+        market_power_state
+    )
+
+    # ========================================================
+    # MAIN SIGNAL
+    # ========================================================
 
     show_signal(
         signal,
@@ -372,18 +577,21 @@ try:
     c1, c2, c3 = st.columns(3)
 
     with c1:
+
         st.metric(
             selected_asset,
             f"${latest.close:,.2f}"
         )
 
     with c2:
+
         st.metric(
             "Signal",
             signal
         )
 
     with c3:
+
         st.metric(
             "Confidence",
             f"{confidence:.0f}%"
@@ -470,6 +678,7 @@ try:
         "⚠️ Experimental software. Backtests are not guarantees of future "
         "performance. Do not use real funds based solely on these signals."
     )
+
 
 except requests.exceptions.HTTPError as e:
 
