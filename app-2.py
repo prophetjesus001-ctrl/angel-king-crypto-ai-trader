@@ -7,13 +7,13 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V5
-# 4-Hour Timeframe • Improved Signals • Risk Management
+# 👑 ANGEL KING CRYPTO AI TRADER V5.2
+# 4-Hour Timeframe • Strict + Active Mode
 # Auto-refresh every 60 seconds • Trading OFF
 # ============================================================
 
 st.set_page_config(
-    page_title="Angel King Crypto AI Trader V5",
+    page_title="Angel King Crypto AI Trader V5.2",
     page_icon="👑",
     layout="wide"
 )
@@ -68,15 +68,6 @@ def get_klines(symbol="BTCUSDT", limit=200):
     return df
 
 
-def get_current_price(symbol):
-    url = f"{BINANCE_BASE}/api/v3/ticker/price"
-    params = {"symbol": symbol}
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    data = r.json()
-    return float(data["price"])
-
-
 # ============================================================
 # INDICATORS
 # ============================================================
@@ -118,10 +109,10 @@ def indicators(df):
 
 
 # ============================================================
-# SIGNAL ENGINE
+# SIGNAL ENGINE (supports Strict & Active mode)
 # ============================================================
 
-def classify(row, previous=None):
+def classify(row, previous=None, mode="Strict"):
     bull = 0
     bear = 0
     reasons = []
@@ -188,12 +179,20 @@ def classify(row, previous=None):
 
     score = bull - bear
 
-    if score >= 4:
+    # Thresholds depending on mode
+    if mode == "Strict":
+        long_threshold = 4
+        short_threshold = -4
+    else:  # Active Mode
+        long_threshold = 2
+        short_threshold = -2
+
+    if score >= long_threshold:
         signal = "LONG"
-        confidence = "High" if score >= 6 else "Medium"
-    elif score <= -4:
+        confidence = "High" if score >= long_threshold + 2 else "Medium"
+    elif score <= short_threshold:
         signal = "SHORT"
-        confidence = "High" if score <= -6 else "Medium"
+        confidence = "High" if score <= short_threshold - 2 else "Medium"
     else:
         signal = "NEUTRAL"
         confidence = "Low"
@@ -207,7 +206,8 @@ def classify(row, previous=None):
         "reasons": reasons,
         "rsi": rsi,
         "atr": row.atr,
-        "close": price
+        "close": price,
+        "mode": mode
     }
 
 
@@ -255,13 +255,22 @@ def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
 # MAIN APP
 # ============================================================
 
-st.title("👑 Angel King Crypto AI Trader V5")
-st.caption("4-Hour Timeframe • Auto-refresh every 60s • Trading OFF")
+st.title("👑 Angel King Crypto AI Trader V5.2")
+st.caption("4-Hour Timeframe • Strict + Active Mode • Auto-refresh every 60s")
 
+# Sidebar
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
+mode = st.sidebar.radio("Signal Mode", ["Strict", "Active"], index=0)
+
 capital = st.sidebar.number_input("Capital (USDT)", value=TRADE_CAPITAL, min_value=10.0)
 leverage = st.sidebar.slider("Leverage", 1, 20, LEVERAGE)
 risk_pct = st.sidebar.slider("Risk % per trade", 0.5, 3.0, RISK_PERCENT, 0.25)
+
+st.sidebar.markdown("---")
+if mode == "Strict":
+    st.sidebar.info("Strict Mode: Higher quality, fewer signals")
+else:
+    st.sidebar.success("Active Mode: More signals, slightly lower quality")
 
 try:
     df = get_klines(symbol, limit=200)
@@ -270,7 +279,7 @@ try:
     current = df.iloc[-1]
     previous = df.iloc[-2]
 
-    signal_data = classify(current, previous)
+    signal_data = classify(current, previous, mode=mode)
     plan = calculate_trade_plan(signal_data, capital, leverage, risk_pct)
 
     # Metrics
@@ -280,6 +289,7 @@ try:
     col3.metric("Confidence", signal_data["confidence"])
     col4.metric("Score", f"{signal_data['score']:+d}")
 
+    st.markdown(f"**Current Mode:** {mode}")
     st.markdown("---")
 
     st.subheader(f"Signal: {signal_data['signal']}")
@@ -301,7 +311,7 @@ try:
 
         st.success(f"Risking ${plan['risk_amount']:.2f} ({risk_pct}% of capital)")
     else:
-        st.info("No clear high-quality setup right now.")
+        st.info("No clear setup right now.")
 
     # Chart
     st.subheader("4H Chart")
@@ -323,8 +333,6 @@ try:
 except Exception as e:
     st.error(f"Error: {e}")
 
-# ============================================================
-# AUTO REFRESH EVERY 60 SECONDS
-# ============================================================
+# Auto refresh
 time.sleep(60)
 st.rerun()
