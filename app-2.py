@@ -4,1029 +4,381 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V3
-# Binance market data • 1-minute scalping • Trading OFF
-# EXISTING SIGNAL ENGINE LOCKED
+# 👑 ANGEL KING CRYPTO AI TRADER V5 – HIGH CONVICTION
+# Binance Futures • 4H Execution + Daily Bias
+# Trading OFF – Professional Signals + Risk Management
 # ============================================================
 
 st.set_page_config(
-    page_title="Angel King Crypto AI Trader V3",
+    page_title="Angel King V5 – High Conviction 4H",
     page_icon="👑",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # ============================================================
-# CONFIGURATION
+# CONFIG
 # ============================================================
 
-BINANCE_BASE = "https://api.binance.us"
-INTERVAL = "1m"
+FUTURES_BASE = "https://fapi.binance.com"
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"]
 
 # ============================================================
-# TRADE SETTINGS
+# SIDEBAR
 # ============================================================
 
-TRADE_CAPITAL = 10.00
-LEVERAGE = 20
+st.sidebar.title("👑 Angel King V5")
+st.sidebar.markdown("**High Conviction • 4H + Daily Bias**")
 
-# $10 margin × 20x = $200 position size
-POSITION_SIZE = TRADE_CAPITAL * LEVERAGE
+symbol = st.sidebar.selectbox("Symbol", SYMBOLS, index=0)
+capital = st.sidebar.number_input("Capital (USDT)", min_value=20.0, value=100.0, step=10.0)
+leverage = st.sidebar.slider("Leverage", 1, 25, 8)
+risk_pct = st.sidebar.slider("Risk per trade (%)", 0.5, 3.0, 1.0, 0.25)
 
-# ATR multiplier for Take Profit
-TP_ATR_MULTIPLIER = 1.0
-
+st.sidebar.markdown("---")
+st.sidebar.success("Trading is OFF – Signals only")
+auto_refresh = st.sidebar.checkbox("Auto-refresh (60s)", value=True)
 
 # ============================================================
-# BINANCE MARKET DATA
+# DATA FUNCTIONS
 # ============================================================
 
-@st.cache_data(ttl=4)
-def get_klines(symbol="BTCUSDT", limit=300):
-
-    url = f"{BINANCE_BASE}/api/v3/klines"
-
-    params = {
-        "symbol": symbol,
-        "interval": INTERVAL,
-        "limit": limit
-    }
-
-    r = requests.get(
-        url,
-        params=params,
-        timeout=10
-    )
-
+@st.cache_data(ttl=50)
+def get_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
+    url = f"{FUTURES_BASE}/fapi/v1/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    r = requests.get(url, params=params, timeout=12)
     r.raise_for_status()
-
     data = r.json()
-
-    if not data:
-        raise ValueError(
-            "Binance returned no market data."
-        )
-
-    df = pd.DataFrame(
-        [
-            {
-                "time": pd.to_datetime(
-                    x[0],
-                    unit="ms"
-                ),
-                "open": float(x[1]),
-                "high": float(x[2]),
-                "low": float(x[3]),
-                "close": float(x[4]),
-                "volume": float(x[5])
-            }
-            for x in data
-        ]
-    )
-
+    df = pd.DataFrame([{
+        "time": pd.to_datetime(x[0], unit="ms", utc=True),
+        "open": float(x[1]),
+        "high": float(x[2]),
+        "low": float(x[3]),
+        "close": float(x[4]),
+        "volume": float(x[5])
+    } for x in data])
     return df
 
-
-# ============================================================
-# CURRENT LIVE MARKET PRICE
-# ============================================================
-
-def get_current_price(symbol):
-
-    url = f"{BINANCE_BASE}/api/v3/ticker/price"
-
-    params = {
-        "symbol": symbol
-    }
-
-    r = requests.get(
-        url,
-        params=params,
-        timeout=10
-    )
-
+@st.cache_data(ttl=30)
+def get_ticker(symbol: str) -> dict:
+    r = requests.get(f"{FUTURES_BASE}/fapi/v1/ticker/24hr", params={"symbol": symbol}, timeout=10)
     r.raise_for_status()
+    return r.json()
 
-    data = r.json()
-
-    if "price" not in data:
-        raise ValueError(
-            "Binance returned no current price."
-        )
-
-    return float(data["price"])
-
+@st.cache_data(ttl=60)
+def get_funding(symbol: str) -> float:
+    r = requests.get(f"{FUTURES_BASE}/fapi/v1/premiumIndex", params={"symbol": symbol}, timeout=10)
+    r.raise_for_status()
+    return float(r.json().get("lastFundingRate", 0)) * 100
 
 # ============================================================
 # INDICATORS
 # ============================================================
 
-def indicators(df):
-
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
 
-    # EMA 9
-    d["ema9"] = d["close"].ewm(
-        span=9,
-        adjust=False
-    ).mean()
+    d["ema9"]  = d["close"].ewm(span=9,  adjust=False).mean()
+    d["ema21"] = d["close"].ewm(span=21, adjust=False).mean()
+    d["ema50"] = d["close"].ewm(span=50, adjust=False).mean()
+    d["ema200"] = d["close"].ewm(span=200, adjust=False).mean()
 
-    # EMA 21
-    d["ema21"] = d["close"].ewm(
-        span=21,
-        adjust=False
-    ).mean()
-
-    # RSI 14
+    # RSI
     delta = d["close"].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, np.nan)
+    d["rsi"] = 100 - (100 / (1 + rs))
 
-    gain = delta.clip(
-        lower=0
-    ).rolling(14).mean()
-
-    loss = (
-        -delta.clip(upper=0)
-    ).rolling(14).mean()
-
-    rs = gain / loss.replace(
-        0,
-        np.nan
-    )
-
-    d["rsi"] = 100 - (
-        100 / (1 + rs)
-    )
-
-    # ATR 14
-    previous_close = d["close"].shift(1)
-
-    tr = pd.concat(
-        [
-            d["high"] - d["low"],
-            (
-                d["high"] -
-                previous_close
-            ).abs(),
-            (
-                d["low"] -
-                previous_close
-            ).abs()
-        ],
-        axis=1
-    ).max(axis=1)
-
+    # ATR
+    prev = d["close"].shift(1)
+    tr = pd.concat([
+        d["high"] - d["low"],
+        (d["high"] - prev).abs(),
+        (d["low"] - prev).abs()
+    ], axis=1).max(axis=1)
     d["atr"] = tr.rolling(14).mean()
+    d["atr_sma"] = d["atr"].rolling(50).mean()
 
-    # Candle direction
-    d["green"] = (
-        d["close"] >
-        d["open"]
-    )
+    # MACD
+    ema12 = d["close"].ewm(span=12, adjust=False).mean()
+    ema26 = d["close"].ewm(span=26, adjust=False).mean()
+    d["macd"] = ema12 - ema26
+    d["macd_signal"] = d["macd"].ewm(span=9, adjust=False).mean()
+    d["macd_hist"] = d["macd"] - d["macd_signal"]
 
-    d["red"] = (
-        d["close"] <
-        d["open"]
-    )
+    # Volume
+    d["vol_sma"] = d["volume"].rolling(20).mean()
 
-    # Recent candle counts
-    d["green_count"] = (
-        d["green"]
-        .rolling(10)
-        .sum()
-    )
-
-    d["red_count"] = (
-        d["red"]
-        .rolling(10)
-        .sum()
-    )
+    # Simple swing structure (last 5 candles)
+    d["swing_high"] = d["high"].rolling(5).max()
+    d["swing_low"]  = d["low"].rolling(5).min()
 
     return d
 
-
 # ============================================================
-# 🔒 ORIGINAL V3 SIGNAL ENGINE
-# DO NOT CHANGE
+# HIGH CONVICTION SIGNAL ENGINE
 # ============================================================
 
-def classify(row, previous=None):
+def generate_signal(df_4h: pd.DataFrame, df_daily: pd.DataFrame) -> dict:
+    if len(df_4h) < 80 or len(df_daily) < 50:
+        return {"signal": "NEUTRAL", "confidence": "None", "score": 0, "reasons": ["Insufficient data"]}
+
+    row = df_4h.iloc[-1]
+    prev = df_4h.iloc[-2]
+    daily = df_daily.iloc[-1]
 
     bull = 0
     bear = 0
     reasons = []
 
-    price = row.close
-    ema9 = row.ema9
-    ema21 = row.ema21
-    rsi = row.rsi
+    # ---------- 1. DAILY BIAS (mandatory filter) ----------
+    daily_bullish = daily.close > daily.ema50 and daily.ema21 > daily.ema50
+    daily_bearish = daily.close < daily.ema50 and daily.ema21 < daily.ema50
 
-    # --------------------------------------------------------
-    # EMA TREND
-    # --------------------------------------------------------
-
-    if price > ema9 > ema21:
-        bull += 2
-        reasons.append(
-            "price above EMA9/EMA21"
-        )
-
-    elif price < ema9 < ema21:
-        bear += 2
-        reasons.append(
-            "price below EMA9/EMA21"
-        )
-
-    # --------------------------------------------------------
-    # EMA DIRECTION
-    # --------------------------------------------------------
-
-    if previous is not None:
-
-        if row.ema9 > previous.ema9:
-            bull += 1
-            reasons.append(
-                "EMA9 rising"
-            )
-
-        elif row.ema9 < previous.ema9:
-            bear += 1
-            reasons.append(
-                "EMA9 falling"
-            )
-
-        if row.ema21 > previous.ema21:
-            bull += 1
-
-        elif row.ema21 < previous.ema21:
-            bear += 1
-
-    # --------------------------------------------------------
-    # RSI
-    # --------------------------------------------------------
-
-    if 50 <= rsi <= 70:
-        bull += 1
-        reasons.append(
-            "RSI bullish zone"
-        )
-
-    elif 30 <= rsi < 50:
-        bear += 1
-        reasons.append(
-            "RSI bearish zone"
-        )
-
-    # --------------------------------------------------------
-    # CANDLE MOMENTUM
-    # --------------------------------------------------------
-
-    if row.green:
-        bull += 1
-
-    elif row.red:
-        bear += 1
-
-    # --------------------------------------------------------
-    # RECENT CANDLE PRESSURE
-    # --------------------------------------------------------
-
-    green_count = row.green_count
-    red_count = row.red_count
-
-    if pd.notna(
-        green_count
-    ) and pd.notna(
-        red_count
-    ):
-
-        if green_count > red_count + 2:
-            bull += 1
-            reasons.append(
-                "green candle pressure"
-            )
-
-        elif red_count > green_count + 2:
-            bear += 1
-            reasons.append(
-                "red candle pressure"
-            )
-
-    # --------------------------------------------------------
-    # FINAL SIGNAL
-    # --------------------------------------------------------
-
-    total = bull + bear
-
-    if bull >= 5 and bull > bear:
-
-        signal = "BUY"
-
-        confidence = min(
-            95,
-            50 + (bull - bear) * 8
-        )
-
-        reason = (
-            ", ".join(reasons[:4])
-            if reasons
-            else "Bullish conditions"
-        )
-
-    elif bear >= 5 and bear > bull:
-
-        signal = "SELL"
-
-        confidence = min(
-            95,
-            50 + (bear - bull) * 8
-        )
-
-        reason = (
-            ", ".join(reasons[:4])
-            if reasons
-            else "Bearish conditions"
-        )
-
+    if daily_bullish:
+        reasons.append("Daily bias: BULLISH")
+    elif daily_bearish:
+        reasons.append("Daily bias: BEARISH")
     else:
+        reasons.append("Daily bias: NEUTRAL → no trade")
+        return {"signal": "NEUTRAL", "confidence": "None", "score": 0, "reasons": reasons,
+                "close": row.close, "atr": row.atr, "rsi": row.rsi}
 
-        signal = "WAIT"
-        confidence = 50
-        reason = "Mixed conditions"
-
-    return (
-        signal,
-        confidence,
-        reason
-    )
-
-
-# ============================================================
-# MARKET POWER INDICATOR
-# ============================================================
-
-def market_power_indicator(
-    d,
-    signal
-):
-
-    if signal == "WAIT":
-        return "", "blank"
-
-    recent = d.iloc[-8:].copy()
-
-    if len(recent) < 8:
-        return "", "blank"
-
-    closes = recent[
-        "close"
-    ].values
-
-    ema9 = recent[
-        "ema9"
-    ].values
-
-    ema21 = recent[
-        "ema21"
-    ].values
-
-    up_candles = sum(
-        recent["close"] >
-        recent["open"]
-    )
-
-    down_candles = sum(
-        recent["close"] <
-        recent["open"]
-    )
-
-    price_change = (
-        closes[-1] -
-        closes[0]
-    )
-
-    ema9_change = (
-        ema9[-1] -
-        ema9[0]
-    )
-
-    ema21_change = (
-        ema21[-1] -
-        ema21[0]
-    )
-
-    down_power = (
-        down_candles >= 5
-        and price_change < 0
-        and ema9_change < 0
-        and ema21_change <= 0
-        and ema9[-1] < ema21[-1]
-    )
-
-    up_power = (
-        up_candles >= 5
-        and price_change > 0
-        and ema9_change > 0
-        and ema21_change >= 0
-        and ema9[-1] > ema21[-1]
-    )
-
-    upward_reversal = (
-        down_candles >= 3
-        and up_candles >= 3
-        and price_change > 0
-        and ema9_change > 0
-    )
-
-    downward_reversal = (
-        up_candles >= 3
-        and down_candles >= 3
-        and price_change < 0
-        and ema9_change < 0
-    )
-
-    if signal == "SELL":
-
-        if upward_reversal:
-            return (
-                "🟡 MARKET REVERSING — UPWARD",
-                "reversing_up"
-            )
-
-        if down_power:
-            return (
-                "🔴 MARKET POWER DOWN — CONSISTENT",
-                "down"
-            )
-
-        return (
-            "🔴 MARKET POWER DOWN",
-            "down"
-        )
-
-    if signal == "BUY":
-
-        if downward_reversal:
-            return (
-                "🟡 MARKET REVERSING — DOWNWARD",
-                "reversing_down"
-            )
-
-        if up_power:
-            return (
-                "🟢 MARKET POWER UP — CONSISTENT",
-                "up"
-            )
-
-        return (
-            "🟢 MARKET POWER UP",
-            "up"
-        )
-
-    return "", "blank"
-
-
-# ============================================================
-# MARKET POWER DISPLAY
-# ============================================================
-
-def show_market_power(
-    text,
-    state
-):
-
-    if state == "blank":
-        return
-
-    if state == "down":
-
-        st.error(
-            f"### {text}"
-        )
-
-    elif state == "up":
-
-        st.success(
-            f"### {text}"
-        )
-
-    elif state == "reversing_up":
-
-        st.warning(
-            f"### {text}"
-        )
-
-    elif state == "reversing_down":
-
-        st.warning(
-            f"### {text}"
-        )
-
-
-# ============================================================
-# 🎯 ENTRY + TAKE PROFIT CALCULATION
-# ============================================================
-
-def calculate_trade(
-    signal,
-    live_entry,
-    atr
-):
-
-    if signal == "WAIT":
-        return None
-
-    if pd.isna(atr) or atr <= 0:
-        return None
-
-    # ATR determines TP distance.
-    tp_distance = (
-        atr *
-        TP_ATR_MULTIPLIER
-    )
-
-    # --------------------------------------------------------
-    # BUY
-    # --------------------------------------------------------
-
-    if signal == "BUY":
-
-        take_profit = (
-            live_entry +
-            tp_distance
-        )
-
-        price_move = (
-            take_profit -
-            live_entry
-        )
-
-    # --------------------------------------------------------
-    # SELL
-    # --------------------------------------------------------
-
-    elif signal == "SELL":
-
-        take_profit = (
-            live_entry -
-            tp_distance
-        )
-
-        price_move = (
-            live_entry -
-            take_profit
-        )
-
+    # ---------- 2. 4H EMA STRUCTURE (core) ----------
+    if row.close > row.ema9 > row.ema21 > row.ema50:
+        bull += 3
+        reasons.append("4H strong bullish EMA stack")
+    elif row.close < row.ema9 < row.ema21 < row.ema50:
+        bear += 3
+        reasons.append("4H strong bearish EMA stack")
     else:
-        return None
+        reasons.append("4H EMA structure not clean")
 
-    # --------------------------------------------------------
-    # PRICE MOVEMENT %
-    # --------------------------------------------------------
+    # EMA slope
+    if row.ema9 > prev.ema9 and row.ema21 > prev.ema21:
+        bull += 1
+        reasons.append("EMAs rising")
+    elif row.ema9 < prev.ema9 and row.ema21 < prev.ema21:
+        bear += 1
+        reasons.append("EMAs falling")
 
-    movement_percent = (
-        price_move /
-        live_entry
-    ) * 100
+    # ---------- 3. RSI ----------
+    if 45 <= row.rsi <= 68:
+        bull += 1
+        reasons.append(f"RSI healthy ({row.rsi:.1f})")
+    elif 32 <= row.rsi <= 55:
+        bear += 1
+        reasons.append(f"RSI healthy ({row.rsi:.1f})")
+    elif row.rsi > 72:
+        bear += 1
+        reasons.append(f"RSI overbought ({row.rsi:.1f})")
+    elif row.rsi < 28:
+        bull += 1
+        reasons.append(f"RSI oversold ({row.rsi:.1f})")
 
-    # --------------------------------------------------------
-    # 20X LEVERAGED POSITION
-    # --------------------------------------------------------
+    # ---------- 4. MACD ----------
+    if row.macd > row.macd_signal and row.macd_hist > 0 and row.macd_hist > prev.macd_hist:
+        bull += 1
+        reasons.append("MACD bullish & expanding")
+    elif row.macd < row.macd_signal and row.macd_hist < 0 and row.macd_hist < prev.macd_hist:
+        bear += 1
+        reasons.append("MACD bearish & expanding")
 
-    position_size = (
-        TRADE_CAPITAL *
-        LEVERAGE
-    )
+    # ---------- 5. VOLUME ----------
+    if row.volume > row.vol_sma * 1.15:
+        if bull > bear:
+            bull += 1
+            reasons.append("Volume confirmation")
+        elif bear > bull:
+            bear += 1
+            reasons.append("Volume confirmation")
 
-    # --------------------------------------------------------
-    # ESTIMATED GROSS PROFIT
-    # --------------------------------------------------------
+    # ---------- 6. VOLATILITY FILTER ----------
+    if row.atr < row.atr_sma * 0.75:
+        reasons.append("Volatility too low → skip")
+        return {"signal": "NEUTRAL", "confidence": "None", "score": 0, "reasons": reasons,
+                "close": row.close, "atr": row.atr, "rsi": row.rsi}
 
-    estimated_profit = (
-        position_size *
-        movement_percent /
-        100
-    )
+    # ---------- 7. MARKET STRUCTURE (simple) ----------
+    if row.close > row.swing_high.shift(1).iloc[-1] if not pd.isna(row.swing_high) else False:
+        bull += 1
+        reasons.append("Broke recent swing high")
+    if row.close < row.swing_low.shift(1).iloc[-1] if not pd.isna(row.swing_low) else False:
+        bear += 1
+        reasons.append("Broke recent swing low")
 
-    # --------------------------------------------------------
-    # ESTIMATED TOTAL EQUITY
-    # --------------------------------------------------------
+    # ---------- FINAL DECISION (strict) ----------
+    score = bull - bear
 
-    estimated_return = (
-        TRADE_CAPITAL +
-        estimated_profit
-    )
+    # Only allow trade in direction of Daily bias
+    if daily_bullish and score >= 4:
+        signal = "LONG"
+        confidence = "High" if score >= 6 else "Medium"
+    elif daily_bearish and score <= -4:
+        signal = "SHORT"
+        confidence = "High" if score <= -6 else "Medium"
+    else:
+        signal = "NEUTRAL"
+        confidence = "Low"
+        reasons.append("Score not strong enough or against Daily bias")
 
     return {
-        "entry": live_entry,
-        "take_profit": take_profit,
-        "capital": TRADE_CAPITAL,
-        "leverage": LEVERAGE,
-        "position_size": position_size,
-        "movement_percent": movement_percent,
-        "estimated_profit": estimated_profit,
-        "estimated_return": estimated_return
+        "signal": signal,
+        "confidence": confidence,
+        "score": score,
+        "bull": bull,
+        "bear": bear,
+        "reasons": reasons,
+        "close": row.close,
+        "atr": row.atr,
+        "rsi": row.rsi,
+        "ema9": row.ema9,
+        "ema21": row.ema21,
+        "ema50": row.ema50
     }
 
-
 # ============================================================
-# TRADE SETUP DISPLAY
-# ============================================================
-
-def show_trade_setup(
-    signal,
-    trade
-):
-
-    if signal == "WAIT":
-        return
-
-    if trade is None:
-        return
-
-    st.markdown(
-        "### 🎯 LIVE TRADE SETUP"
-    )
-
-    c1, c2 = st.columns(2)
-
-    with c1:
-
-        st.metric(
-            "ENTRY PRICE",
-            f"${trade['entry']:,.2f}"
-        )
-
-        st.metric(
-            "TRADE CAPITAL",
-            f"${trade['capital']:.2f}"
-        )
-
-        st.metric(
-            "LEVERAGE",
-            f"{trade['leverage']}×"
-        )
-
-    with c2:
-
-        st.metric(
-            "TAKE PROFIT",
-            f"${trade['take_profit']:,.2f}"
-        )
-
-        st.metric(
-            "POSITION SIZE",
-            f"${trade['position_size']:,.2f}"
-        )
-
-        st.metric(
-            "EST. PROFIT",
-            f"${trade['estimated_profit']:.4f}"
-        )
-
-    st.success(
-        f"💰 ESTIMATED RETURN: "
-        f"${trade['estimated_return']:.4f}"
-    )
-
-    st.caption(
-        f"TP movement: "
-        f"{trade['movement_percent']:.4f}%"
-        " • Profit calculation uses the "
-        f"${trade['position_size']:.2f} "
-        "leveraged position."
-    )
-
-    st.caption(
-        "⚠️ Estimated gross result before "
-        "Binance trading fees, funding fees, "
-        "slippage and liquidation effects."
-    )
-
-
-# ============================================================
-# SIGNAL DISPLAY
+# RISK CALCULATOR
 # ============================================================
 
-def show_signal(
-    signal,
-    confidence,
-    reason
-):
+def calc_risk(sig: dict, capital: float, leverage: int, risk_pct: float):
+    if sig["signal"] == "NEUTRAL":
+        return None
 
-    if signal == "BUY":
+    atr = sig["atr"]
+    price = sig["close"]
+    stop_dist = atr * 1.4          # slightly tighter for higher quality
+    tp_dist   = atr * 2.8          # \~2R target
 
-        st.success(
-            f"🟢 BUY • Confidence: "
-            f"{confidence:.0f}%"
-        )
-
-        st.markdown(
-            f"""
-            **Signal:** 🟢 BUY
-
-            **Reason:** {reason}
-            """
-        )
-
-    elif signal == "SELL":
-
-        st.error(
-            f"🔴 SELL • Confidence: "
-            f"{confidence:.0f}%"
-        )
-
-        st.markdown(
-            f"""
-            **Signal:** 🔴 SELL
-
-            **Reason:** {reason}
-            """
-        )
-
+    if sig["signal"] == "LONG":
+        entry = price
+        sl = entry - stop_dist
+        tp = entry + tp_dist
     else:
+        entry = price
+        sl = entry + stop_dist
+        tp = entry - tp_dist
 
-        st.warning(
-            f"🟡 WAIT • Confidence: "
-            f"{confidence:.0f}%"
-        )
+    risk_amount = capital * (risk_pct / 100)
+    qty = risk_amount / stop_dist
+    notional = qty * entry
+    margin = notional / leverage
 
-        st.markdown(
-            f"""
-            **Signal:** 🟡 WAIT
-
-            **Reason:** {reason}
-            """
-        )
-
-
-# ============================================================
-# TITLE
-# ============================================================
-
-st.markdown(
-    """
-    # 👑 Angel King Crypto AI Trader V3
-
-    **Binance market data • 1-minute scalping • "
-    "live signal dashboard • trading OFF**
-    """
-)
-
+    return {
+        "entry": entry,
+        "sl": sl,
+        "tp": tp,
+        "rr": tp_dist / stop_dist,
+        "qty": qty,
+        "notional": notional,
+        "margin": margin,
+        "risk_amount": risk_amount
+    }
 
 # ============================================================
-# MARKET SELECTION
+# CHART
 # ============================================================
 
-st.markdown(
-    "### 📊 Binance Market"
-)
+def make_chart(df: pd.DataFrame):
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                        row_heights=[0.58, 0.21, 0.21],
+                        subplot_titles=("Price + EMAs", "RSI", "MACD"))
 
-assets = {
-    "BTC/USDT": "BTCUSDT",
-    "ETH/USDT": "ETHUSDT",
-    "BNB/USDT": "BNBUSDT",
-    "SOL/USDT": "SOLUSDT",
-    "XRP/USDT": "XRPUSDT",
-    "DOGE/USDT": "DOGEUSDT",
-    "ADA/USDT": "ADAUSDT",
-    "AVAX/USDT": "AVAXUSDT",
-    "LINK/USDT": "LINKUSDT",
-    "LTC/USDT": "LTCUSDT"
-}
+    fig.add_trace(go.Candlestick(x=df["time"], open=df["open"], high=df["high"],
+                                 low=df["low"], close=df["close"], name="Price"), row=1, col=1)
 
-selected_asset = st.selectbox(
-    "Market",
-    list(assets.keys()),
-    index=0
-)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["ema9"],  name="EMA9",  line=dict(width=1.2)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["ema21"], name="EMA21", line=dict(width=1.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["ema50"], name="EMA50", line=dict(width=2.0)), row=1, col=1)
 
-SYMBOL = assets[selected_asset]
+    fig.add_trace(go.Scatter(x=df["time"], y=df["rsi"], name="RSI", line=dict(color="purple")), row=2, col=1)
+    fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
+    fig.add_trace(go.Scatter(x=df["time"], y=df["macd"], name="MACD", line=dict(color="blue")), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df["time"], y=df["macd_signal"], name="Signal", line=dict(color="orange")), row=3, col=1)
+    colors = ["green" if v >= 0 else "red" for v in df["macd_hist"]]
+    fig.add_trace(go.Bar(x=df["time"], y=df["macd_hist"], name="Hist", marker_color=colors), row=3, col=1)
+
+    fig.update_layout(height=820, xaxis_rangeslider_visible=False, template="plotly_dark",
+                      margin=dict(l=10, r=10, t=40, b=10), showlegend=True)
+    return fig
 
 # ============================================================
-# LIVE PROCESSING
+# MAIN
 # ============================================================
+
+st.title("👑 Angel King Crypto AI Trader V5")
+st.caption("High-Conviction 4H System • Daily Bias Filter • Professional Risk Management")
 
 try:
+    with st.spinner(f"Loading {symbol} data..."):
+        df_4h = add_indicators(get_klines(symbol, "4h", 200))
+        df_d  = add_indicators(get_klines(symbol, "1d", 120))
+        ticker = get_ticker(symbol)
+        funding = get_funding(symbol)
+        sig = generate_signal(df_4h, df_d)
+        risk = calc_risk(sig, capital, leverage, risk_pct)
 
-    # Historical 1-minute data
-    df = get_klines(
-        symbol=SYMBOL,
-        limit=300
-    )
-
-    d = indicators(df)
-
-    latest = d.iloc[-1]
-    previous = d.iloc[-2]
-
-    # ========================================================
-    # ORIGINAL ENGINE
-    # ========================================================
-
-    signal, confidence, reason = classify(
-        latest,
-        previous
-    )
-
-    # ========================================================
-    # ACTUAL CURRENT BINANCE PRICE
-    # ========================================================
-
-    live_price = get_current_price(
-        SYMBOL
-    )
-
-    # ========================================================
-    # MARKET POWER
-    # ========================================================
-
-    market_power_text, market_power_state = (
-        market_power_indicator(
-            d,
-            signal
-        )
-    )
-
-    # ========================================================
-    # ENTRY + TP + PROFIT
-    # ========================================================
-
-    trade = calculate_trade(
-        signal,
-        live_price,
-        latest.atr
-    )
-
-    # ========================================================
-    # FRONT / TOP SECTION
-    # ========================================================
+    # Metrics
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Price", f"${sig['close']:,.2f}")
+    c2.metric("24h Change", f"{float(ticker['priceChangePercent']):.2f}%")
+    c3.metric("Funding", f"{funding:.4f}%")
+    c4.metric("Signal", sig["signal"], delta=sig["confidence"])
+    c5.metric("Score", f"{sig['score']:+d}")
 
     st.markdown("---")
 
-    # Market Power
-    show_market_power(
-        market_power_text,
-        market_power_state
-    )
+    # Signal box
+    color = {"LONG": "green", "SHORT": "red", "NEUTRAL": "gray"}[sig["signal"]]
+    st.subheader(f"Signal: :{color}[{sig['signal']}]   |   Confidence: **{sig['confidence']}**")
 
-    # Live trade setup
-    show_trade_setup(
-        signal,
-        trade
-    )
+    with st.expander("Full Reasoning", expanded=True):
+        for r in sig["reasons"]:
+            st.write("• " + r)
+        st.write(f"Bull points: {sig.get('bull', 0)}   |   Bear points: {sig.get('bear', 0)}")
 
-    # Main signal
-    show_signal(
-        signal,
-        confidence,
-        reason
-    )
+    # Risk plan
+    if risk:
+        st.subheader("Trade Plan & Risk")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Entry", f"${risk['entry']:,.2f}")
+        r2.metric("Stop Loss", f"${risk['sl']:,.2f}")
+        r3.metric("Take Profit", f"${risk['tp']:,.2f}")
+        r4.metric("Risk : Reward", f"1 : {risk['rr']:.2f}")
 
-    st.markdown("---")
+        r5, r6, r7 = st.columns(3)
+        r5.metric("Quantity", f"{risk['qty']:.4f}")
+        r6.metric("Notional", f"${risk['notional']:,.0f}")
+        r7.metric("Margin Required", f"${risk['margin']:,.2f}")
 
-    # ========================================================
-    # CURRENT MARKET PRICE
-    # ========================================================
+        st.success(f"Risking **${risk['risk_amount']:.2f}** ({risk_pct}% of capital)")
+    else:
+        st.warning("No high-conviction setup right now. Wait for better conditions.")
 
-    c1, c2, c3 = st.columns(3)
+    # Chart
+    st.subheader("4H Chart")
+    st.plotly_chart(make_chart(df_4h), use_container_width=True)
 
-    with c1:
+    with st.expander("Notes"):
+        st.write("• Only trades that align with Daily bias are allowed.")
+        st.write("• Minimum score of ±4 required.")
+        st.write("• Volatility filter blocks low-ATR environments.")
+        st.write("• Always wait for 4H candle close before acting.")
+        st.write("• This is not financial advice. Manage risk strictly.")
 
-        st.metric(
-            selected_asset,
-            f"${live_price:,.2f}"
-        )
-
-    with c2:
-
-        st.metric(
-            "Signal",
-            signal
-        )
-
-    with c3:
-
-        st.metric(
-            "Confidence",
-            f"{confidence:.0f}%"
-        )
-
-    # ========================================================
-    # CHART
-    # ========================================================
-
-    st.subheader(
-        f"{selected_asset} • 1-minute chart"
-    )
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Candlestick(
-            x=d["time"],
-            open=d["open"],
-            high=d["high"],
-            low=d["low"],
-            close=d["close"],
-            name="Price"
-        )
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=d["time"],
-            y=d["ema9"],
-            mode="lines",
-            name="EMA 9"
-        )
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=d["time"],
-            y=d["ema21"],
-            mode="lines",
-            name="EMA 21"
-        )
-    )
-
-    fig.update_layout(
-        height=500,
-        xaxis_rangeslider_visible=False
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-    # ========================================================
-    # SIGNAL DETAILS
-    # ========================================================
-
-    st.markdown(
-        f"""
-        **Reason:** {reason}
-
-        **RSI:** {latest.rsi:.2f}
-
-        **EMA 9:** {latest.ema9:.2f}
-
-        **EMA 21:** {latest.ema21:.2f}
-
-        **ATR 14:** {latest.atr:.6f}
-        """
-    )
-
-    # ========================================================
-    # STATUS
-    # ========================================================
-
-    st.info(
-        "Execution is OFF. This app does not place "
-        "Binance trades."
-    )
-
-    st.caption(
-        "🔄 Live Binance market data refreshes "
-        "automatically every 5 seconds."
-    )
-
-    st.caption(
-        "💰 Trade calculation: $10 capital × "
-        "20× leverage = $200 position size."
-    )
-
-    st.caption(
-        "⚠️ Estimated profit is before trading fees, "
-        "funding, slippage and other execution costs."
-    )
-
-    st.caption(
-        "⚠️ Experimental software. Backtests are "
-        "not guarantees of future performance."
-    )
-
-
-except requests.exceptions.HTTPError as e:
-
-    st.error(
-        f"Unable to retrieve Binance market data: {e}"
-    )
+    st.caption(f"Last update: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC | Binance Futures")
 
 except Exception as e:
+    st.error(f"Error: {e}")
 
-    st.error(
-        f"Unable to retrieve Binance market data: {e}"
-    )
-
-
-# ============================================================
-# AUTOMATIC 5-SECOND REFRESH
-# ============================================================
-
-time.sleep(5)
-
-st.rerun()
+if auto_refresh:
+    time.sleep(60)
+    st.rerun()
