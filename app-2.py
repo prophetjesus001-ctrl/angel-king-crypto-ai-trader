@@ -4,14 +4,12 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timezone
 
 # ============================================================
 # 👑 ANGEL KING CRYPTO AI TRADER V5
-# Based on your original code
-# 4-Hour timeframe • Improved signals • Risk management
-# Trading OFF
+# 4-Hour Timeframe • Improved Signals • Risk Management
+# Auto-refresh every 60 seconds • Trading OFF
 # ============================================================
 
 st.set_page_config(
@@ -21,7 +19,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# CONFIGURATION (same style as your original)
+# CONFIGURATION
 # ============================================================
 
 BINANCE_BASE = "https://api.binance.us"
@@ -33,15 +31,15 @@ INTERVAL = "4h"
 
 TRADE_CAPITAL = 50.00
 LEVERAGE = 10
-RISK_PERCENT = 1.0          # Risk 1% of capital per trade
+RISK_PERCENT = 1.0
 TP_ATR_MULTIPLIER = 2.5
 SL_ATR_MULTIPLIER = 1.4
 
 # ============================================================
-# BINANCE MARKET DATA (same style as your original)
+# DATA FUNCTIONS
 # ============================================================
 
-@st.cache_data(ttl=55)
+@st.cache_data(ttl=50)
 def get_klines(symbol="BTCUSDT", limit=200):
     url = f"{BINANCE_BASE}/api/v3/klines"
     params = {
@@ -120,7 +118,7 @@ def indicators(df):
 
 
 # ============================================================
-# IMPROVED SIGNAL ENGINE (based on your original style)
+# SIGNAL ENGINE
 # ============================================================
 
 def classify(row, previous=None):
@@ -134,7 +132,7 @@ def classify(row, previous=None):
     ema50 = row.ema50
     rsi = row.rsi
 
-    # 1. EMA Trend (strongest)
+    # EMA Trend
     if price > ema9 > ema21 > ema50:
         bull += 3
         reasons.append("Strong bullish EMA stack (9>21>50)")
@@ -148,7 +146,7 @@ def classify(row, previous=None):
         bear += 1
         reasons.append("Price below EMA21")
 
-    # 2. EMA Direction
+    # EMA Direction
     if previous is not None:
         if row.ema9 > previous.ema9 and row.ema21 > previous.ema21:
             bull += 1
@@ -157,7 +155,7 @@ def classify(row, previous=None):
             bear += 1
             reasons.append("EMAs falling")
 
-    # 3. RSI
+    # RSI
     if 45 <= rsi <= 65:
         bull += 1
         reasons.append(f"RSI healthy zone ({rsi:.1f})")
@@ -171,7 +169,7 @@ def classify(row, previous=None):
         bull += 1
         reasons.append(f"RSI oversold ({rsi:.1f})")
 
-    # 4. MACD
+    # MACD
     if row.macd > row.macd_signal and row.macd_hist > 0:
         bull += 1
         reasons.append("MACD bullish")
@@ -179,7 +177,7 @@ def classify(row, previous=None):
         bear += 1
         reasons.append("MACD bearish")
 
-    # 5. Volume
+    # Volume
     if row.volume > row.vol_sma * 1.2:
         if bull > bear:
             bull += 1
@@ -188,7 +186,6 @@ def classify(row, previous=None):
             bear += 1
             reasons.append("Volume confirmation")
 
-    # Final decision
     score = bull - bear
 
     if score >= 4:
@@ -259,7 +256,7 @@ def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
 # ============================================================
 
 st.title("👑 Angel King Crypto AI Trader V5")
-st.caption("4-Hour Timeframe • Improved Signals • Risk Management • Trading OFF")
+st.caption("4-Hour Timeframe • Auto-refresh every 60s • Trading OFF")
 
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
 capital = st.sidebar.number_input("Capital (USDT)", value=TRADE_CAPITAL, min_value=10.0)
@@ -285,12 +282,10 @@ try:
 
     st.markdown("---")
 
-    # Reasons
     st.subheader(f"Signal: {signal_data['signal']}")
     for reason in signal_data["reasons"]:
         st.write(f"• {reason}")
 
-    # Trade Plan
     if plan:
         st.subheader("Trade Plan")
         c1, c2, c3, c4 = st.columns(4)
@@ -308,7 +303,7 @@ try:
     else:
         st.info("No clear high-quality setup right now.")
 
-    # Simple Chart
+    # Chart
     st.subheader("4H Chart")
     fig = go.Figure(data=[go.Candlestick(
         x=df["time"],
@@ -323,8 +318,13 @@ try:
     fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True)
 
-    st.caption(f"Last update: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC | Data: Binance.US")
+    st.caption(f"Last update: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC | Auto-refresh every 60 seconds")
 
 except Exception as e:
     st.error(f"Error: {e}")
-    st.info("If this keeps happening, the server IP is restricted. Run the app locally for best results.")
+
+# ============================================================
+# AUTO REFRESH EVERY 60 SECONDS
+# ============================================================
+time.sleep(60)
+st.rerun()
