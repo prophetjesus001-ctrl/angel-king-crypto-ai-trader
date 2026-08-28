@@ -8,30 +8,37 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V5 – HIGH CONVICTION
-# Binance Futures • 4H Execution + Daily Bias
-# Trading OFF – Professional Signals + Risk Management
+# 👑 ANGEL KING CRYPTO AI TRADER V5.1 – FIXED
+# Binance Futures • 4H + Daily Bias • Anti-451 Protection
 # ============================================================
 
 st.set_page_config(
-    page_title="Angel King V5 – High Conviction 4H",
+    page_title="Angel King V5 – High Conviction",
     page_icon="👑",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ============================================================
-# CONFIG
-# ============================================================
+# Multiple endpoints to reduce 451 blocks
+FUTURES_ENDPOINTS = [
+    "https://fapi.binance.com",
+    "https://fapi1.binance.com",
+    "https://fapi2.binance.com",
+    "https://fapi3.binance.com",
+]
 
-FUTURES_BASE = "https://fapi.binance.com"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+}
+
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"]
 
 # ============================================================
 # SIDEBAR
 # ============================================================
 
-st.sidebar.title("👑 Angel King V5")
+st.sidebar.title("👑 Angel King V5.1")
 st.sidebar.markdown("**High Conviction • 4H + Daily Bias**")
 
 symbol = st.sidebar.selectbox("Symbol", SYMBOLS, index=0)
@@ -44,16 +51,32 @@ st.sidebar.success("Trading is OFF – Signals only")
 auto_refresh = st.sidebar.checkbox("Auto-refresh (60s)", value=True)
 
 # ============================================================
-# DATA FUNCTIONS
+# RESILIENT DATA FUNCTIONS (Anti-451)
 # ============================================================
+
+def safe_request(path: str, params: dict = None):
+    """Try multiple Binance Futures endpoints until one works."""
+    last_error = None
+    for base in FUTURES_ENDPOINTS:
+        try:
+            url = f"{base}{path}"
+            r = requests.get(url, params=params, headers=HEADERS, timeout=10)
+            if r.status_code == 200:
+                return r.json()
+            last_error = f"{r.status_code} from {base}"
+        except Exception as e:
+            last_error = str(e)
+            continue
+    raise Exception(f"All Binance endpoints blocked or failed. Last error: {last_error}")
+
 
 @st.cache_data(ttl=50)
 def get_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
-    url = f"{FUTURES_BASE}/fapi/v1/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    r = requests.get(url, params=params, timeout=12)
-    r.raise_for_status()
-    data = r.json()
+    data = safe_request("/fapi/v1/klines", {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    })
     df = pd.DataFrame([{
         "time": pd.to_datetime(x[0], unit="ms", utc=True),
         "open": float(x[1]),
@@ -64,17 +87,16 @@ def get_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
     } for x in data])
     return df
 
+
 @st.cache_data(ttl=30)
 def get_ticker(symbol: str) -> dict:
-    r = requests.get(f"{FUTURES_BASE}/fapi/v1/ticker/24hr", params={"symbol": symbol}, timeout=10)
-    r.raise_for_status()
-    return r.json()
+    return safe_request("/fapi/v1/ticker/24hr", {"symbol": symbol})
+
 
 @st.cache_data(ttl=60)
 def get_funding(symbol: str) -> float:
-    r = requests.get(f"{FUTURES_BASE}/fapi/v1/premiumIndex", params={"symbol": symbol}, timeout=10)
-    r.raise_for_status()
-    return float(r.json().get("lastFundingRate", 0)) * 100
+    data = safe_request("/fapi/v1/premiumIndex", {"symbol": symbol})
+    return float(data.get("lastFundingRate", 0)) * 100
 
 # ============================================================
 # INDICATORS
@@ -83,19 +105,17 @@ def get_funding(symbol: str) -> float:
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
 
-    d["ema9"]  = d["close"].ewm(span=9,  adjust=False).mean()
-    d["ema21"] = d["close"].ewm(span=21, adjust=False).mean()
-    d["ema50"] = d["close"].ewm(span=50, adjust=False).mean()
+    d["ema9"]   = d["close"].ewm(span=9,   adjust=False).mean()
+    d["ema21"]  = d["close"].ewm(span=21,  adjust=False).mean()
+    d["ema50"]  = d["close"].ewm(span=50,  adjust=False).mean()
     d["ema200"] = d["close"].ewm(span=200, adjust=False).mean()
 
-    # RSI
     delta = d["close"].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     rs = gain / loss.replace(0, np.nan)
     d["rsi"] = 100 - (100 / (1 + rs))
 
-    # ATR
     prev = d["close"].shift(1)
     tr = pd.concat([
         d["high"] - d["low"],
@@ -105,17 +125,13 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     d["atr"] = tr.rolling(14).mean()
     d["atr_sma"] = d["atr"].rolling(50).mean()
 
-    # MACD
     ema12 = d["close"].ewm(span=12, adjust=False).mean()
     ema26 = d["close"].ewm(span=26, adjust=False).mean()
     d["macd"] = ema12 - ema26
     d["macd_signal"] = d["macd"].ewm(span=9, adjust=False).mean()
     d["macd_hist"] = d["macd"] - d["macd_signal"]
 
-    # Volume
     d["vol_sma"] = d["volume"].rolling(20).mean()
-
-    # Simple swing structure (last 5 candles)
     d["swing_high"] = d["high"].rolling(5).max()
     d["swing_low"]  = d["low"].rolling(5).min()
 
@@ -137,7 +153,7 @@ def generate_signal(df_4h: pd.DataFrame, df_daily: pd.DataFrame) -> dict:
     bear = 0
     reasons = []
 
-    # ---------- 1. DAILY BIAS (mandatory filter) ----------
+    # 1. Daily Bias
     daily_bullish = daily.close > daily.ema50 and daily.ema21 > daily.ema50
     daily_bearish = daily.close < daily.ema50 and daily.ema21 < daily.ema50
 
@@ -150,7 +166,7 @@ def generate_signal(df_4h: pd.DataFrame, df_daily: pd.DataFrame) -> dict:
         return {"signal": "NEUTRAL", "confidence": "None", "score": 0, "reasons": reasons,
                 "close": row.close, "atr": row.atr, "rsi": row.rsi}
 
-    # ---------- 2. 4H EMA STRUCTURE (core) ----------
+    # 2. 4H EMA Structure
     if row.close > row.ema9 > row.ema21 > row.ema50:
         bull += 3
         reasons.append("4H strong bullish EMA stack")
@@ -160,7 +176,6 @@ def generate_signal(df_4h: pd.DataFrame, df_daily: pd.DataFrame) -> dict:
     else:
         reasons.append("4H EMA structure not clean")
 
-    # EMA slope
     if row.ema9 > prev.ema9 and row.ema21 > prev.ema21:
         bull += 1
         reasons.append("EMAs rising")
@@ -168,7 +183,7 @@ def generate_signal(df_4h: pd.DataFrame, df_daily: pd.DataFrame) -> dict:
         bear += 1
         reasons.append("EMAs falling")
 
-    # ---------- 3. RSI ----------
+    # 3. RSI
     if 45 <= row.rsi <= 68:
         bull += 1
         reasons.append(f"RSI healthy ({row.rsi:.1f})")
@@ -182,7 +197,7 @@ def generate_signal(df_4h: pd.DataFrame, df_daily: pd.DataFrame) -> dict:
         bull += 1
         reasons.append(f"RSI oversold ({row.rsi:.1f})")
 
-    # ---------- 4. MACD ----------
+    # 4. MACD
     if row.macd > row.macd_signal and row.macd_hist > 0 and row.macd_hist > prev.macd_hist:
         bull += 1
         reasons.append("MACD bullish & expanding")
@@ -190,7 +205,7 @@ def generate_signal(df_4h: pd.DataFrame, df_daily: pd.DataFrame) -> dict:
         bear += 1
         reasons.append("MACD bearish & expanding")
 
-    # ---------- 5. VOLUME ----------
+    # 5. Volume
     if row.volume > row.vol_sma * 1.15:
         if bull > bear:
             bull += 1
@@ -199,24 +214,25 @@ def generate_signal(df_4h: pd.DataFrame, df_daily: pd.DataFrame) -> dict:
             bear += 1
             reasons.append("Volume confirmation")
 
-    # ---------- 6. VOLATILITY FILTER ----------
+    # 6. Volatility filter
     if row.atr < row.atr_sma * 0.75:
         reasons.append("Volatility too low → skip")
         return {"signal": "NEUTRAL", "confidence": "None", "score": 0, "reasons": reasons,
                 "close": row.close, "atr": row.atr, "rsi": row.rsi}
 
-    # ---------- 7. MARKET STRUCTURE (simple) ----------
-    if row.close > row.swing_high.shift(1).iloc[-1] if not pd.isna(row.swing_high) else False:
-        bull += 1
-        reasons.append("Broke recent swing high")
-    if row.close < row.swing_low.shift(1).iloc[-1] if not pd.isna(row.swing_low) else False:
-        bear += 1
-        reasons.append("Broke recent swing low")
+    # 7. Market structure
+    try:
+        if row.close > df_4h["swing_high"].iloc[-6]:
+            bull += 1
+            reasons.append("Broke recent swing high")
+        if row.close < df_4h["swing_low"].iloc[-6]:
+            bear += 1
+            reasons.append("Broke recent swing low")
+    except:
+        pass
 
-    # ---------- FINAL DECISION (strict) ----------
     score = bull - bear
 
-    # Only allow trade in direction of Daily bias
     if daily_bullish and score >= 4:
         signal = "LONG"
         confidence = "High" if score >= 6 else "Medium"
@@ -253,8 +269,8 @@ def calc_risk(sig: dict, capital: float, leverage: int, risk_pct: float):
 
     atr = sig["atr"]
     price = sig["close"]
-    stop_dist = atr * 1.4          # slightly tighter for higher quality
-    tp_dist   = atr * 2.8          # \~2R target
+    stop_dist = atr * 1.4
+    tp_dist = atr * 2.8
 
     if sig["signal"] == "LONG":
         entry = price
@@ -311,14 +327,14 @@ def make_chart(df: pd.DataFrame):
     return fig
 
 # ============================================================
-# MAIN
+# MAIN APP
 # ============================================================
 
-st.title("👑 Angel King Crypto AI Trader V5")
-st.caption("High-Conviction 4H System • Daily Bias Filter • Professional Risk Management")
+st.title("👑 Angel King Crypto AI Trader V5.1")
+st.caption("High-Conviction 4H System • Daily Bias • Anti-Block Protection")
 
 try:
-    with st.spinner(f"Loading {symbol} data..."):
+    with st.spinner(f"Loading {symbol} data from Binance Futures..."):
         df_4h = add_indicators(get_klines(symbol, "4h", 200))
         df_d  = add_indicators(get_klines(symbol, "1d", 120))
         ticker = get_ticker(symbol)
@@ -326,7 +342,7 @@ try:
         sig = generate_signal(df_4h, df_d)
         risk = calc_risk(sig, capital, leverage, risk_pct)
 
-    # Metrics
+    # Top metrics
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Price", f"${sig['close']:,.2f}")
     c2.metric("24h Change", f"{float(ticker['priceChangePercent']):.2f}%")
@@ -336,7 +352,6 @@ try:
 
     st.markdown("---")
 
-    # Signal box
     color = {"LONG": "green", "SHORT": "red", "NEUTRAL": "gray"}[sig["signal"]]
     st.subheader(f"Signal: :{color}[{sig['signal']}]   |   Confidence: **{sig['confidence']}**")
 
@@ -345,7 +360,6 @@ try:
             st.write("• " + r)
         st.write(f"Bull points: {sig.get('bull', 0)}   |   Bear points: {sig.get('bear', 0)}")
 
-    # Risk plan
     if risk:
         st.subheader("Trade Plan & Risk")
         r1, r2, r3, r4 = st.columns(4)
@@ -363,21 +377,20 @@ try:
     else:
         st.warning("No high-conviction setup right now. Wait for better conditions.")
 
-    # Chart
     st.subheader("4H Chart")
     st.plotly_chart(make_chart(df_4h), use_container_width=True)
 
     with st.expander("Notes"):
-        st.write("• Only trades that align with Daily bias are allowed.")
-        st.write("• Minimum score of ±4 required.")
-        st.write("• Volatility filter blocks low-ATR environments.")
-        st.write("• Always wait for 4H candle close before acting.")
-        st.write("• This is not financial advice. Manage risk strictly.")
+        st.write("• Only trades aligned with Daily bias are allowed.")
+        st.write("• Minimum score ±4 required + volatility filter.")
+        st.write("• Always wait for 4H candle close.")
+        st.write("• This is not financial advice.")
 
-    st.caption(f"Last update: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC | Binance Futures")
+    st.caption(f"Last update: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
 except Exception as e:
     st.error(f"Error: {e}")
+    st.warning("Binance is blocking this server IP (451). The most reliable fix is to run the app **locally** on your computer or phone.")
 
 if auto_refresh:
     time.sleep(60)
