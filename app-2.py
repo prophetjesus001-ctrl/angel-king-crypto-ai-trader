@@ -7,20 +7,15 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V5.3
-# 4-Hour • Strict + Active Mode • Trend Consistency Box
-# Auto-refresh every 60 seconds • Trading OFF
+# 👑 ANGEL KING CRYPTO AI TRADER V5.5
+# Compact Signal Box (Green = BUY / Red = SELL)
 # ============================================================
 
 st.set_page_config(
-    page_title="Angel King Crypto AI Trader V5.3",
+    page_title="Angel King Crypto AI Trader V5.5",
     page_icon="👑",
     layout="wide"
 )
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 BINANCE_BASE = "https://api.binance.us"
 INTERVAL = "4h"
@@ -31,10 +26,6 @@ RISK_PERCENT = 1.0
 TP_ATR_MULTIPLIER = 2.5
 SL_ATR_MULTIPLIER = 1.4
 
-# ============================================================
-# DATA FUNCTIONS
-# ============================================================
-
 @st.cache_data(ttl=50)
 def get_klines(symbol="BTCUSDT", limit=200):
     url = f"{BINANCE_BASE}/api/v3/klines"
@@ -42,10 +33,8 @@ def get_klines(symbol="BTCUSDT", limit=200):
     r = requests.get(url, params=params, timeout=12)
     r.raise_for_status()
     data = r.json()
-
     if not data:
-        raise ValueError("Binance returned no market data.")
-
+        raise ValueError("No data")
     df = pd.DataFrame([{
         "time": pd.to_datetime(x[0], unit="ms"),
         "open": float(x[1]),
@@ -55,10 +44,6 @@ def get_klines(symbol="BTCUSDT", limit=200):
         "volume": float(x[5])
     } for x in data])
     return df
-
-# ============================================================
-# INDICATORS
-# ============================================================
 
 def indicators(df):
     d = df.copy()
@@ -72,11 +57,11 @@ def indicators(df):
     rs = gain / loss.replace(0, np.nan)
     d["rsi"] = 100 - (100 / (1 + rs))
 
-    previous_close = d["close"].shift(1)
+    prev = d["close"].shift(1)
     tr = pd.concat([
         d["high"] - d["low"],
-        (d["high"] - previous_close).abs(),
-        (d["low"] - previous_close).abs()
+        (d["high"] - prev).abs(),
+        (d["low"] - prev).abs()
     ], axis=1).max(axis=1)
     d["atr"] = tr.rolling(14).mean()
 
@@ -85,93 +70,52 @@ def indicators(df):
     d["macd"] = ema12 - ema26
     d["macd_signal"] = d["macd"].ewm(span=9, adjust=False).mean()
     d["macd_hist"] = d["macd"] - d["macd_signal"]
-
     d["vol_sma"] = d["volume"].rolling(20).mean()
     return d
 
-# ============================================================
-# TREND CONSISTENCY ANALYZER (New Feature)
-# ============================================================
-
 def analyze_trend_consistency(df, lookback=8):
-    """
-    Studies recent candles to detect consistent uptrend or downtrend.
-    Returns: status, color, simple_trend
-    """
     if len(df) < lookback + 5:
-        return "Neutral", "gray", "Neutral"
-
+        return "Neutral", "gray"
     recent = df.iloc[-lookback:]
     closes = recent["close"].values
-    highs = recent["high"].values
-    lows = recent["low"].values
+    last_close = df["close"].iloc[-1]
     ema21 = df["ema21"].iloc[-1]
     ema50 = df["ema50"].iloc[-1]
-    last_close = df["close"].iloc[-1]
 
-    # Count higher closes and lower closes
-    higher_closes = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
-    lower_closes = sum(1 for i in range(1, len(closes)) if closes[i] < closes[i-1])
+    higher = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
+    lower = sum(1 for i in range(1, len(closes)) if closes[i] < closes[i-1])
 
-    # Simple structure
-    higher_highs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
-    lower_lows = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
+    up = 0
+    if last_close > ema21 > ema50: up += 2
+    if higher >= lookback * 0.6: up += 2
+    if last_close > df["close"].iloc[-lookback]: up += 1
 
-    # Conditions for Consistent Uptrend
-    uptrend_score = 0
-    if last_close > ema21 > ema50:
-        uptrend_score += 2
-    if higher_closes >= lookback * 0.6:
-        uptrend_score += 2
-    if higher_highs >= lookback * 0.5:
-        uptrend_score += 1
-    if last_close > df["close"].iloc[-lookback]:
-        uptrend_score += 1
+    down = 0
+    if last_close < ema21 < ema50: down += 2
+    if lower >= lookback * 0.6: down += 2
+    if last_close < df["close"].iloc[-lookback]: down += 1
 
-    # Conditions for Consistent Downtrend
-    downtrend_score = 0
-    if last_close < ema21 < ema50:
-        downtrend_score += 2
-    if lower_closes >= lookback * 0.6:
-        downtrend_score += 2
-    if lower_lows >= lookback * 0.5:
-        downtrend_score += 1
-    if last_close < df["close"].iloc[-lookback]:
-        downtrend_score += 1
-
-    # Decision
-    if uptrend_score >= 5 and uptrend_score > downtrend_score + 1:
-        return "Consistent Uptrend", "green", "Uptrend"
-    elif downtrend_score >= 5 and downtrend_score > uptrend_score + 1:
-        return "Consistent Downtrend", "red", "Downtrend"
-    else:
-        return "No Clear Consistency", "gray", "Neutral"
-
-# ============================================================
-# SIGNAL ENGINE
-# ============================================================
+    if up >= 4 and up > down:
+        return "Uptrend", "green"
+    elif down >= 4 and down > up:
+        return "Downtrend", "red"
+    return "Neutral", "gray"
 
 def classify(row, previous=None, mode="Strict"):
-    bull = 0
-    bear = 0
+    bull = bear = 0
     reasons = []
-
     price = row.close
-    ema9 = row.ema9
-    ema21 = row.ema21
-    ema50 = row.ema50
-    rsi = row.rsi
 
-    if price > ema9 > ema21 > ema50:
+    if price > row.ema9 > row.ema21 > row.ema50:
         bull += 3
-        reasons.append("Strong bullish EMA stack (9>21>50)")
-    elif price < ema9 < ema21 < ema50:
+        reasons.append("Strong bullish EMA stack")
+    elif price < row.ema9 < row.ema21 < row.ema50:
         bear += 3
-        reasons.append("Strong bearish EMA stack (9<21<50)")
-    elif price > ema21:
+        reasons.append("Strong bearish EMA stack")
+    elif price > row.ema21:
         bull += 1
         reasons.append("Price above EMA21")
-    elif price < ema21:
+    elif price < row.ema21:
         bear += 1
         reasons.append("Price below EMA21")
 
@@ -183,40 +127,23 @@ def classify(row, previous=None, mode="Strict"):
             bear += 1
             reasons.append("EMAs falling")
 
-    if 45 <= rsi <= 65:
-        bull += 1
-        reasons.append(f"RSI healthy zone ({rsi:.1f})")
-    elif 35 <= rsi <= 55:
-        bear += 1
-        reasons.append(f"RSI healthy zone ({rsi:.1f})")
-    elif rsi >= 70:
-        bear += 1
-        reasons.append(f"RSI overbought ({rsi:.1f})")
-    elif rsi <= 30:
-        bull += 1
-        reasons.append(f"RSI oversold ({rsi:.1f})")
+    rsi = row.rsi
+    if 45 <= rsi <= 65: bull += 1; reasons.append(f"RSI healthy ({rsi:.1f})")
+    elif 35 <= rsi <= 55: bear += 1; reasons.append(f"RSI healthy ({rsi:.1f})")
+    elif rsi >= 70: bear += 1; reasons.append(f"RSI overbought ({rsi:.1f})")
+    elif rsi <= 30: bull += 1; reasons.append(f"RSI oversold ({rsi:.1f})")
 
     if row.macd > row.macd_signal and row.macd_hist > 0:
-        bull += 1
-        reasons.append("MACD bullish")
+        bull += 1; reasons.append("MACD bullish")
     elif row.macd < row.macd_signal and row.macd_hist < 0:
-        bear += 1
-        reasons.append("MACD bearish")
+        bear += 1; reasons.append("MACD bearish")
 
     if row.volume > row.vol_sma * 1.2:
-        if bull > bear:
-            bull += 1
-            reasons.append("Volume confirmation")
-        elif bear > bull:
-            bear += 1
-            reasons.append("Volume confirmation")
+        if bull > bear: bull += 1; reasons.append("Volume confirmation")
+        elif bear > bull: bear += 1; reasons.append("Volume confirmation")
 
     score = bull - bear
-
-    if mode == "Strict":
-        long_th, short_th = 4, -4
-    else:
-        long_th, short_th = 2, -2
+    long_th, short_th = (4, -4) if mode == "Strict" else (2, -2)
 
     if score >= long_th:
         signal = "LONG"
@@ -229,134 +156,117 @@ def classify(row, previous=None, mode="Strict"):
         confidence = "Low"
 
     return {
-        "signal": signal,
-        "confidence": confidence,
-        "score": score,
-        "bull": bull,
-        "bear": bear,
-        "reasons": reasons,
-        "rsi": rsi,
-        "atr": row.atr,
-        "close": price,
-        "mode": mode
+        "signal": signal, "confidence": confidence, "score": score,
+        "reasons": reasons, "rsi": rsi, "atr": row.atr, "close": price
     }
-
-# ============================================================
-# RISK MANAGEMENT
-# ============================================================
 
 def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
     if signal_data["signal"] == "NEUTRAL":
         return None
-
     atr = signal_data["atr"]
     price = signal_data["close"]
-    stop_distance = atr * SL_ATR_MULTIPLIER
-    tp_distance = atr * TP_ATR_MULTIPLIER
+    stop_dist = atr * SL_ATR_MULTIPLIER
+    tp_dist = atr * TP_ATR_MULTIPLIER
 
     if signal_data["signal"] == "LONG":
-        entry = price
-        stop_loss = entry - stop_distance
-        take_profit = entry + tp_distance
+        entry, sl, tp = price, price - stop_dist, price + tp_dist
     else:
-        entry = price
-        stop_loss = entry + stop_distance
-        take_profit = entry - tp_distance
+        entry, sl, tp = price, price + stop_dist, price - tp_dist
 
     risk_amount = capital * (risk_pct / 100)
-    quantity = risk_amount / stop_distance
-    notional = quantity * entry
-    margin = notional / leverage
-
+    qty = risk_amount / stop_dist
     return {
-        "entry": entry,
-        "stop_loss": stop_loss,
-        "take_profit": take_profit,
-        "quantity": quantity,
-        "notional": notional,
-        "margin": margin,
-        "risk_amount": risk_amount,
-        "rr": tp_distance / stop_distance
+        "entry": entry, "stop_loss": sl, "take_profit": tp,
+        "quantity": qty, "notional": qty * entry,
+        "margin": (qty * entry) / leverage,
+        "risk_amount": risk_amount, "rr": tp_dist / stop_dist
     }
 
 # ============================================================
-# MAIN APP
+# MAIN
 # ============================================================
 
-st.title("👑 Angel King Crypto AI Trader V5.3")
-st.caption("4-Hour • Strict + Active Mode • Trend Consistency Analysis")
+st.title("👑 Angel King Crypto AI Trader V5.5")
+st.caption("Compact Signal Box • 4H • Auto-refresh")
 
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
 mode = st.sidebar.radio("Signal Mode", ["Strict", "Active"], index=0)
 capital = st.sidebar.number_input("Capital (USDT)", value=TRADE_CAPITAL, min_value=10.0)
 leverage = st.sidebar.slider("Leverage", 1, 20, LEVERAGE)
-risk_pct = st.sidebar.slider("Risk % per trade", 0.5, 3.0, RISK_PERCENT, 0.25)
-
-st.sidebar.markdown("---")
-if mode == "Strict":
-    st.sidebar.info("Strict Mode: Higher quality, fewer signals")
-else:
-    st.sidebar.success("Active Mode: More signals")
+risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, RISK_PERCENT, 0.25)
 
 try:
-    df = get_klines(symbol, limit=200)
+    df = get_klines(symbol)
     df = indicators(df)
-
     current = df.iloc[-1]
     previous = df.iloc[-2]
 
-    signal_data = classify(current, previous, mode=mode)
+    signal_data = classify(current, previous, mode)
     plan = calculate_trade_plan(signal_data, capital, leverage, risk_pct)
+    trend_text, trend_color = analyze_trend_consistency(df)
 
-    # ===== NEW: TREND CONSISTENCY BOX =====
-    consistency_text, consistency_color, simple_trend = analyze_trend_consistency(df)
+    # ========== SMALL COMPACT SIGNAL BOX ==========
+    signal = signal_data["signal"]
 
-    if consistency_color == "green":
-        box_color = "#0e7a0e"
-    elif consistency_color == "red":
-        box_color = "#8b0000"
+    if signal == "LONG":
+        box_color = "#00c853"          # Bright green
+        box_text = "BUY"
+        text_color = "white"
+    elif signal == "SHORT":
+        box_color = "#ff1744"          # Bright red
+        box_text = "SELL"
+        text_color = "white"
     else:
-        box_color = "#444444"
+        box_color = "#616161"          # Gray
+        box_text = "NEUTRAL"
+        text_color = "white"
 
-    st.markdown(
-        f"""
-        <div style="background-color:{box_color}; padding:18px; border-radius:12px; text-align:center; margin-bottom:20px;">
-            <h2 style="color:white; margin:0;">{consistency_text}</h2>
-            <p style="color:white; margin:5px 0 0 0; font-size:18px;">Market Structure: <b>{simple_trend}</b></p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-    # =====================================
+    st.markdown(f"""
+    <div style="
+        display: inline-block;
+        background-color: {box_color};
+        padding: 10px 28px;
+        border-radius: 8px;
+        margin-bottom: 18px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    ">
+        <span style="color: {text_color}; font-size: 22px; font-weight: 700; letter-spacing: 1px;">
+            {box_text}
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+    # ==============================================
+
+    # Small trend info
+    st.caption(f"Market Structure: {trend_text}")
 
     # Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Price", f"${signal_data['close']:,.2f}")
-    col2.metric("Signal", signal_data["signal"])
-    col3.metric("Confidence", signal_data["confidence"])
-    col4.metric("Score", f"{signal_data['score']:+d}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Price", f"${signal_data['close']:,.2f}")
+    c2.metric("Signal", signal_data["signal"])
+    c3.metric("Confidence", signal_data["confidence"])
+    c4.metric("Score", f"{signal_data['score']:+d}")
 
-    st.markdown(f"**Current Mode:** {mode}")
+    st.markdown(f"**Mode:** {mode}")
     st.markdown("---")
 
-    st.subheader(f"Signal: {signal_data['signal']}")
-    for reason in signal_data["reasons"]:
-        st.write(f"• {reason}")
+    st.subheader("Reasons")
+    for r in signal_data["reasons"]:
+        st.write(f"• {r}")
 
     if plan:
         st.subheader("Trade Plan")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Entry", f"${plan['entry']:,.2f}")
-        c2.metric("Stop Loss", f"${plan['stop_loss']:,.2f}")
-        c3.metric("Take Profit", f"${plan['take_profit']:,.2f}")
-        c4.metric("Risk : Reward", f"1 : {plan['rr']:.2f}")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Entry", f"${plan['entry']:,.2f}")
+        r2.metric("Stop Loss", f"${plan['stop_loss']:,.2f}")
+        r3.metric("Take Profit", f"${plan['take_profit']:,.2f}")
+        r4.metric("R:R", f"1:{plan['rr']:.2f}")
 
-        c5, c6, c7 = st.columns(3)
-        c5.metric("Quantity", f"{plan['quantity']:.4f}")
-        c6.metric("Notional", f"${plan['notional']:,.0f}")
-        c7.metric("Margin Needed", f"${plan['margin']:,.2f}")
-
-        st.success(f"Risking ${plan['risk_amount']:.2f} ({risk_pct}% of capital)")
+        r5, r6, r7 = st.columns(3)
+        r5.metric("Quantity", f"{plan['quantity']:.4f}")
+        r6.metric("Notional", f"${plan['notional']:,.0f}")
+        r7.metric("Margin", f"${plan['margin']:,.2f}")
+        st.success(f"Risking ${plan['risk_amount']:.2f}")
     else:
         st.info("No clear setup right now.")
 
@@ -369,14 +279,13 @@ try:
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema9"], name="EMA9", line=dict(width=1)))
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema21"], name="EMA21", line=dict(width=1.5)))
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema50"], name="EMA50", line=dict(width=2)))
-    fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_dark")
+    fig.update_layout(height=580, xaxis_rangeslider_visible=False, template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True)
 
-    st.caption(f"Last update: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC | Auto-refresh every 60s")
+    st.caption(f"Last update: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
 except Exception as e:
     st.error(f"Error: {e}")
 
-# Auto refresh
 time.sleep(60)
 st.rerun()
