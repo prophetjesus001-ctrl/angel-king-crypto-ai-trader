@@ -7,14 +7,13 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V5.9
-# 1-Minute Timeframe (everything else stays the same)
+# 👑 ANGEL KING CRYPTO AI TRADER V6.0
+# Multi-Timeframe: 1m / 15m / 1h
 # ============================================================
 
-st.set_page_config(page_title="Angel King V5.9 - 1m", page_icon="👑", layout="wide")
+st.set_page_config(page_title="Angel King V6.0", page_icon="👑", layout="wide")
 
 BINANCE_BASE = "https://api.binance.us"
-INTERVAL = "1m"          # ← ONLY CHANGE: from 4h to 1m
 
 TRADE_CAPITAL = 50.0
 LEVERAGE = 10
@@ -22,10 +21,10 @@ RISK_PERCENT = 1.0
 TP_ATR_MULTIPLIER = 2.5
 SL_ATR_MULTIPLIER = 1.4
 
-@st.cache_data(ttl=15)   # shorter cache for 1-minute
-def get_klines(symbol="BTCUSDT", limit=300):
+@st.cache_data(ttl=20)
+def get_klines(symbol="BTCUSDT", interval="1m", limit=300):
     url = f"{BINANCE_BASE}/api/v3/klines"
-    params = {"symbol": symbol, "interval": INTERVAL, "limit": limit}
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
     r = requests.get(url, params=params, timeout=12)
     r.raise_for_status()
     data = r.json()
@@ -66,7 +65,6 @@ def find_swing_points(df, left=3, right=3):
     highs = df["high"].values
     lows = df["low"].values
     swing_high = swing_low = None
-
     for i in range(left, len(df)-right):
         if highs[i] == max(highs[i-left:i+right+1]):
             swing_high = highs[i]
@@ -157,17 +155,19 @@ def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
 # MAIN
 # ============================================================
 
-st.title("👑 Angel King V5.9 (1-Minute)")
-st.caption("1-Minute Timeframe • All previous features kept")
+st.title("👑 Angel King V6.0")
+st.caption("Multi-Timeframe • 1m / 15m / 1h")
 
+# Sidebar controls
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
+timeframe = st.sidebar.radio("Timeframe", ["1m", "15m", "1h"], index=0)
 mode = st.sidebar.radio("Mode", ["Strict", "Active"], index=0)
 capital = st.sidebar.number_input("Capital", value=TRADE_CAPITAL, min_value=10.0)
 leverage = st.sidebar.slider("Leverage", 1, 20, LEVERAGE)
 risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, RISK_PERCENT, 0.25)
 
 try:
-    df = get_klines(symbol)
+    df = get_klines(symbol, interval=timeframe, limit=300)
     df = indicators(df)
     current = df.iloc[-1]
     previous = df.iloc[-2]
@@ -191,7 +191,7 @@ try:
     </div>
     &nbsp;&nbsp;
     <span style="font-size:18px; font-weight:600;">${signal_data['close']:,.2f}</span>
-    <span style="color:gray; font-size:14px;"> &nbsp; Score: {signal_data['score']:+d}</span>
+    <span style="color:gray; font-size:14px;"> &nbsp; Score: {signal_data['score']:+d} | TF: {timeframe}</span>
     """, unsafe_allow_html=True)
 
     # Two separate small boxes
@@ -247,7 +247,7 @@ try:
     fig.update_layout(height=460, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=20,b=20))
     st.plotly_chart(fig, use_container_width=True)
 
-    st.caption(f"1-Minute Chart | Updated: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC")
+    st.caption(f"Timeframe: {timeframe} | Updated: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC")
 
 except Exception as e:
     st.error(str(e))
