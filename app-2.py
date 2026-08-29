@@ -7,12 +7,12 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V5.5
-# Compact Signal Box (Green = BUY / Red = SELL)
+# 👑 ANGEL KING CRYPTO AI TRADER V5.6
+# Compact Design - Small Signal + Small Trade Plan Box
 # ============================================================
 
 st.set_page_config(
-    page_title="Angel King Crypto AI Trader V5.5",
+    page_title="Angel King V5.6",
     page_icon="👑",
     layout="wide"
 )
@@ -33,8 +33,6 @@ def get_klines(symbol="BTCUSDT", limit=200):
     r = requests.get(url, params=params, timeout=12)
     r.raise_for_status()
     data = r.json()
-    if not data:
-        raise ValueError("No data")
     df = pd.DataFrame([{
         "time": pd.to_datetime(x[0], unit="ms"),
         "open": float(x[1]),
@@ -72,34 +70,6 @@ def indicators(df):
     d["macd_hist"] = d["macd"] - d["macd_signal"]
     d["vol_sma"] = d["volume"].rolling(20).mean()
     return d
-
-def analyze_trend_consistency(df, lookback=8):
-    if len(df) < lookback + 5:
-        return "Neutral", "gray"
-    recent = df.iloc[-lookback:]
-    closes = recent["close"].values
-    last_close = df["close"].iloc[-1]
-    ema21 = df["ema21"].iloc[-1]
-    ema50 = df["ema50"].iloc[-1]
-
-    higher = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
-    lower = sum(1 for i in range(1, len(closes)) if closes[i] < closes[i-1])
-
-    up = 0
-    if last_close > ema21 > ema50: up += 2
-    if higher >= lookback * 0.6: up += 2
-    if last_close > df["close"].iloc[-lookback]: up += 1
-
-    down = 0
-    if last_close < ema21 < ema50: down += 2
-    if lower >= lookback * 0.6: down += 2
-    if last_close < df["close"].iloc[-lookback]: down += 1
-
-    if up >= 4 and up > down:
-        return "Uptrend", "green"
-    elif down >= 4 and down > up:
-        return "Downtrend", "red"
-    return "Neutral", "gray"
 
 def classify(row, previous=None, mode="Strict"):
     bull = bear = 0
@@ -183,14 +153,14 @@ def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
     }
 
 # ============================================================
-# MAIN
+# MAIN APP
 # ============================================================
 
-st.title("👑 Angel King Crypto AI Trader V5.5")
-st.caption("Compact Signal Box • 4H • Auto-refresh")
+st.title("👑 Angel King V5.6")
+st.caption("Compact Layout • Auto-refresh every 60s")
 
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
-mode = st.sidebar.radio("Signal Mode", ["Strict", "Active"], index=0)
+mode = st.sidebar.radio("Mode", ["Strict", "Active"], index=0)
 capital = st.sidebar.number_input("Capital (USDT)", value=TRADE_CAPITAL, min_value=10.0)
 leverage = st.sidebar.slider("Leverage", 1, 20, LEVERAGE)
 risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, RISK_PERCENT, 0.25)
@@ -203,72 +173,64 @@ try:
 
     signal_data = classify(current, previous, mode)
     plan = calculate_trade_plan(signal_data, capital, leverage, risk_pct)
-    trend_text, trend_color = analyze_trend_consistency(df)
 
-    # ========== SMALL COMPACT SIGNAL BOX ==========
-    signal = signal_data["signal"]
+    # ========== TOP ROW: Signal Badge + Compact Trade Plan ==========
+    col_left, col_right = st.columns([1, 1.3])
 
-    if signal == "LONG":
-        box_color = "#00c853"          # Bright green
-        box_text = "BUY"
-        text_color = "white"
-    elif signal == "SHORT":
-        box_color = "#ff1744"          # Bright red
-        box_text = "SELL"
-        text_color = "white"
-    else:
-        box_color = "#616161"          # Gray
-        box_text = "NEUTRAL"
-        text_color = "white"
+    with col_left:
+        # Small Signal Box
+        signal = signal_data["signal"]
+        if signal == "LONG":
+            bg = "#00c853"
+            txt = "BUY"
+        elif signal == "SHORT":
+            bg = "#ff1744"
+            txt = "SELL"
+        else:
+            bg = "#616161"
+            txt = "NEUTRAL"
 
-    st.markdown(f"""
-    <div style="
-        display: inline-block;
-        background-color: {box_color};
-        padding: 10px 28px;
-        border-radius: 8px;
-        margin-bottom: 18px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-    ">
-        <span style="color: {text_color}; font-size: 22px; font-weight: 700; letter-spacing: 1px;">
-            {box_text}
-        </span>
-    </div>
-    """, unsafe_allow_html=True)
-    # ==============================================
+        st.markdown(f"""
+        <div style="background-color:{bg}; padding:12px 20px; border-radius:8px; text-align:center; margin-bottom:10px;">
+            <span style="color:white; font-size:20px; font-weight:700;">{txt}</span>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # Small trend info
-    st.caption(f"Market Structure: {trend_text}")
+        st.metric("Price", f"${signal_data['close']:,.2f}")
+        st.metric("Score", f"{signal_data['score']:+d}")
+        st.caption(f"Confidence: {signal_data['confidence']} | Mode: {mode}")
 
-    # Metrics
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Price", f"${signal_data['close']:,.2f}")
-    c2.metric("Signal", signal_data["signal"])
-    c3.metric("Confidence", signal_data["confidence"])
-    c4.metric("Score", f"{signal_data['score']:+d}")
+    with col_right:
+        # Compact Trade Plan Box
+        if plan:
+            st.markdown(f"""
+            <div style="
+                background-color:#1e1e1e;
+                border:1px solid #333;
+                border-radius:10px;
+                padding:12px 16px;
+                font-size:14px;
+            ">
+                <b style="font-size:15px;">Trade Plan</b><br><br>
+                <b>Entry:</b> ${plan['entry']:,.2f}<br>
+                <b>Stop Loss:</b> ${plan['stop_loss']:,.2f}<br>
+                <b>Take Profit:</b> ${plan['take_profit']:,.2f}<br>
+                <b>R:R</b> → 1:{plan['rr']:.2f}<br>
+                <b>Qty:</b> {plan['quantity']:.4f}<br>
+                <b>Notional:</b> ${plan['notional']:,.0f}<br>
+                <b>Margin:</b> ${plan['margin']:,.2f}<br>
+                <b>Risk:</b> ${plan['risk_amount']:.2f}
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.info("No active trade plan")
 
-    st.markdown(f"**Mode:** {mode}")
     st.markdown("---")
 
-    st.subheader("Reasons")
-    for r in signal_data["reasons"]:
-        st.write(f"• {r}")
-
-    if plan:
-        st.subheader("Trade Plan")
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Entry", f"${plan['entry']:,.2f}")
-        r2.metric("Stop Loss", f"${plan['stop_loss']:,.2f}")
-        r3.metric("Take Profit", f"${plan['take_profit']:,.2f}")
-        r4.metric("R:R", f"1:{plan['rr']:.2f}")
-
-        r5, r6, r7 = st.columns(3)
-        r5.metric("Quantity", f"{plan['quantity']:.4f}")
-        r6.metric("Notional", f"${plan['notional']:,.0f}")
-        r7.metric("Margin", f"${plan['margin']:,.2f}")
-        st.success(f"Risking ${plan['risk_amount']:.2f}")
-    else:
-        st.info("No clear setup right now.")
+    # Reasons
+    with st.expander("Signal Reasons", expanded=False):
+        for r in signal_data["reasons"]:
+            st.write(f"• {r}")
 
     # Chart
     st.subheader("4H Chart")
@@ -279,7 +241,7 @@ try:
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema9"], name="EMA9", line=dict(width=1)))
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema21"], name="EMA21", line=dict(width=1.5)))
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema50"], name="EMA50", line=dict(width=2)))
-    fig.update_layout(height=580, xaxis_rangeslider_visible=False, template="plotly_dark")
+    fig.update_layout(height=520, xaxis_rangeslider_visible=False, template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True)
 
     st.caption(f"Last update: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
