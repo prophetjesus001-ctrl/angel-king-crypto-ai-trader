@@ -7,20 +7,16 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V5.6
-# Compact Design - Small Signal + Small Trade Plan Box
+# 👑 ANGEL KING CRYPTO AI TRADER V5.8
+# Two separate small boxes: Swing Levels + Trade Plan
 # ============================================================
 
-st.set_page_config(
-    page_title="Angel King V5.6",
-    page_icon="👑",
-    layout="wide"
-)
+st.set_page_config(page_title="Angel King V5.8", page_icon="👑", layout="wide")
 
 BINANCE_BASE = "https://api.binance.us"
 INTERVAL = "4h"
 
-TRADE_CAPITAL = 50.00
+TRADE_CAPITAL = 50.0
 LEVERAGE = 10
 RISK_PERCENT = 1.0
 TP_ATR_MULTIPLIER = 2.5
@@ -33,7 +29,7 @@ def get_klines(symbol="BTCUSDT", limit=200):
     r = requests.get(url, params=params, timeout=12)
     r.raise_for_status()
     data = r.json()
-    df = pd.DataFrame([{
+    return pd.DataFrame([{
         "time": pd.to_datetime(x[0], unit="ms"),
         "open": float(x[1]),
         "high": float(x[2]),
@@ -41,7 +37,6 @@ def get_klines(symbol="BTCUSDT", limit=200):
         "close": float(x[4]),
         "volume": float(x[5])
     } for x in data])
-    return df
 
 def indicators(df):
     d = df.copy()
@@ -56,11 +51,7 @@ def indicators(df):
     d["rsi"] = 100 - (100 / (1 + rs))
 
     prev = d["close"].shift(1)
-    tr = pd.concat([
-        d["high"] - d["low"],
-        (d["high"] - prev).abs(),
-        (d["low"] - prev).abs()
-    ], axis=1).max(axis=1)
+    tr = pd.concat([d["high"]-d["low"], (d["high"]-prev).abs(), (d["low"]-prev).abs()], axis=1).max(axis=1)
     d["atr"] = tr.rolling(14).mean()
 
     ema12 = d["close"].ewm(span=12, adjust=False).mean()
@@ -70,6 +61,18 @@ def indicators(df):
     d["macd_hist"] = d["macd"] - d["macd_signal"]
     d["vol_sma"] = d["volume"].rolling(20).mean()
     return d
+
+def find_swing_points(df, left=3, right=3):
+    highs = df["high"].values
+    lows = df["low"].values
+    swing_high = swing_low = None
+
+    for i in range(left, len(df)-right):
+        if highs[i] == max(highs[i-left:i+right+1]):
+            swing_high = highs[i]
+        if lows[i] == min(lows[i-left:i+right+1]):
+            swing_low = lows[i]
+    return swing_high, swing_low
 
 def classify(row, previous=None, mode="Strict"):
     bull = bear = 0
@@ -125,10 +128,8 @@ def classify(row, previous=None, mode="Strict"):
         signal = "NEUTRAL"
         confidence = "Low"
 
-    return {
-        "signal": signal, "confidence": confidence, "score": score,
-        "reasons": reasons, "rsi": rsi, "atr": row.atr, "close": price
-    }
+    return {"signal": signal, "confidence": confidence, "score": score,
+            "reasons": reasons, "rsi": rsi, "atr": row.atr, "close": price}
 
 def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
     if signal_data["signal"] == "NEUTRAL":
@@ -148,20 +149,20 @@ def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
     return {
         "entry": entry, "stop_loss": sl, "take_profit": tp,
         "quantity": qty, "notional": qty * entry,
-        "margin": (qty * entry) / leverage,
+        "margin": (qty * entry)/leverage,
         "risk_amount": risk_amount, "rr": tp_dist / stop_dist
     }
 
 # ============================================================
-# MAIN APP
+# MAIN
 # ============================================================
 
-st.title("👑 Angel King V5.6")
-st.caption("Compact Layout • Auto-refresh every 60s")
+st.title("👑 Angel King V5.8")
+st.caption("Separate small boxes • Auto-refresh")
 
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
 mode = st.sidebar.radio("Mode", ["Strict", "Active"], index=0)
-capital = st.sidebar.number_input("Capital (USDT)", value=TRADE_CAPITAL, min_value=10.0)
+capital = st.sidebar.number_input("Capital", value=TRADE_CAPITAL, min_value=10.0)
 leverage = st.sidebar.slider("Leverage", 1, 20, LEVERAGE)
 risk_pct = st.sidebar.slider("Risk %", 0.5, 3.0, RISK_PERCENT, 0.25)
 
@@ -173,81 +174,87 @@ try:
 
     signal_data = classify(current, previous, mode)
     plan = calculate_trade_plan(signal_data, capital, leverage, risk_pct)
+    swing_high, swing_low = find_swing_points(df)
 
-    # ========== TOP ROW: Signal Badge + Compact Trade Plan ==========
-    col_left, col_right = st.columns([1, 1.3])
+    # ===== SIGNAL BADGE =====
+    signal = signal_data["signal"]
+    if signal == "LONG":
+        bg, txt = "#00c853", "BUY"
+    elif signal == "SHORT":
+        bg, txt = "#ff1744", "SELL"
+    else:
+        bg, txt = "#616161", "NEUTRAL"
 
-    with col_left:
-        # Small Signal Box
-        signal = signal_data["signal"]
-        if signal == "LONG":
-            bg = "#00c853"
-            txt = "BUY"
-        elif signal == "SHORT":
-            bg = "#ff1744"
-            txt = "SELL"
-        else:
-            bg = "#616161"
-            txt = "NEUTRAL"
+    st.markdown(f"""
+    <div style="background-color:{bg}; padding:8px 16px; border-radius:6px; display:inline-block; margin-bottom:12px;">
+        <span style="color:white; font-size:16px; font-weight:700;">{txt}</span>
+    </div>
+    &nbsp;&nbsp;
+    <span style="font-size:18px; font-weight:600;">${signal_data['close']:,.2f}</span>
+    <span style="color:gray; font-size:14px;"> &nbsp; Score: {signal_data['score']:+d}</span>
+    """, unsafe_allow_html=True)
 
+    # ===== TWO SEPARATE SMALL BOXES =====
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Small Box 1: Swing Levels only
         st.markdown(f"""
-        <div style="background-color:{bg}; padding:12px 20px; border-radius:8px; text-align:center; margin-bottom:10px;">
-            <span style="color:white; font-size:20px; font-weight:700;">{txt}</span>
+        <div style="background:#1a1a1a; border:1px solid #333; border-radius:6px; padding:8px 10px; font-size:13px;">
+            <b>Swing Levels</b><br>
+            High: <b>{f'${swing_high:,.1f}' if swing_high else 'N/A'}</b><br>
+            Low: &nbsp;<b>{f'${swing_low:,.1f}' if swing_low else 'N/A'}</b>
         </div>
         """, unsafe_allow_html=True)
 
-        st.metric("Price", f"${signal_data['close']:,.2f}")
-        st.metric("Score", f"{signal_data['score']:+d}")
-        st.caption(f"Confidence: {signal_data['confidence']} | Mode: {mode}")
-
-    with col_right:
-        # Compact Trade Plan Box
+    with col2:
+        # Small Box 2: Trade Plan only
         if plan:
             st.markdown(f"""
-            <div style="
-                background-color:#1e1e1e;
-                border:1px solid #333;
-                border-radius:10px;
-                padding:12px 16px;
-                font-size:14px;
-            ">
-                <b style="font-size:15px;">Trade Plan</b><br><br>
-                <b>Entry:</b> ${plan['entry']:,.2f}<br>
-                <b>Stop Loss:</b> ${plan['stop_loss']:,.2f}<br>
-                <b>Take Profit:</b> ${plan['take_profit']:,.2f}<br>
-                <b>R:R</b> → 1:{plan['rr']:.2f}<br>
-                <b>Qty:</b> {plan['quantity']:.4f}<br>
-                <b>Notional:</b> ${plan['notional']:,.0f}<br>
-                <b>Margin:</b> ${plan['margin']:,.2f}<br>
-                <b>Risk:</b> ${plan['risk_amount']:.2f}
+            <div style="background:#1a1a1a; border:1px solid #333; border-radius:6px; padding:8px 10px; font-size:13px;">
+                <b>Trade Plan</b><br>
+                Entry: ${plan['entry']:,.2f}<br>
+                SL: ${plan['stop_loss']:,.2f}<br>
+                TP: ${plan['take_profit']:,.2f}<br>
+                R:R 1:{plan['rr']:.2f}
             </div>
             """, unsafe_allow_html=True)
         else:
-            st.info("No active trade plan")
+            st.markdown("""
+            <div style="background:#1a1a1a; border:1px solid #333; border-radius:6px; padding:8px 10px; font-size:13px;">
+                <b>Trade Plan</b><br>
+                No active plan
+            </div>
+            """, unsafe_allow_html=True)
 
-    st.markdown("---")
+    st.markdown("")
 
-    # Reasons
-    with st.expander("Signal Reasons", expanded=False):
+    with st.expander("More details & Reasons"):
+        if plan:
+            st.write(f"Quantity: {plan['quantity']:.4f} | Margin: ${plan['margin']:.2f} | Risk: ${plan['risk_amount']:.2f}")
         for r in signal_data["reasons"]:
-            st.write(f"• {r}")
+            st.write("• " + r)
 
     # Chart
-    st.subheader("4H Chart")
     fig = go.Figure(data=[go.Candlestick(
         x=df["time"], open=df["open"], high=df["high"],
         low=df["low"], close=df["close"]
     )])
-    fig.add_trace(go.Scatter(x=df["time"], y=df["ema9"], name="EMA9", line=dict(width=1)))
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema21"], name="EMA21", line=dict(width=1.5)))
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema50"], name="EMA50", line=dict(width=2)))
-    fig.update_layout(height=520, xaxis_rangeslider_visible=False, template="plotly_dark")
+
+    if swing_high:
+        fig.add_hline(y=swing_high, line_dash="dot", line_color="red", annotation_text="High")
+    if swing_low:
+        fig.add_hline(y=swing_low, line_dash="dot", line_color="green", annotation_text="Low")
+
+    fig.update_layout(height=460, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=20,b=20))
     st.plotly_chart(fig, use_container_width=True)
 
-    st.caption(f"Last update: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    st.caption(f"Updated: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC")
 
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(str(e))
 
 time.sleep(60)
 st.rerun()
