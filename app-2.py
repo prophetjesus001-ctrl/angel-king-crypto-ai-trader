@@ -7,14 +7,14 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V5.8
-# Two separate small boxes: Swing Levels + Trade Plan
+# 👑 ANGEL KING CRYPTO AI TRADER V5.9
+# 1-Minute Timeframe (everything else stays the same)
 # ============================================================
 
-st.set_page_config(page_title="Angel King V5.8", page_icon="👑", layout="wide")
+st.set_page_config(page_title="Angel King V5.9 - 1m", page_icon="👑", layout="wide")
 
 BINANCE_BASE = "https://api.binance.us"
-INTERVAL = "4h"
+INTERVAL = "1m"          # ← ONLY CHANGE: from 4h to 1m
 
 TRADE_CAPITAL = 50.0
 LEVERAGE = 10
@@ -22,8 +22,8 @@ RISK_PERCENT = 1.0
 TP_ATR_MULTIPLIER = 2.5
 SL_ATR_MULTIPLIER = 1.4
 
-@st.cache_data(ttl=50)
-def get_klines(symbol="BTCUSDT", limit=200):
+@st.cache_data(ttl=15)   # shorter cache for 1-minute
+def get_klines(symbol="BTCUSDT", limit=300):
     url = f"{BINANCE_BASE}/api/v3/klines"
     params = {"symbol": symbol, "interval": INTERVAL, "limit": limit}
     r = requests.get(url, params=params, timeout=12)
@@ -157,8 +157,8 @@ def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
 # MAIN
 # ============================================================
 
-st.title("👑 Angel King V5.8")
-st.caption("Separate small boxes • Auto-refresh")
+st.title("👑 Angel King V5.9 (1-Minute)")
+st.caption("1-Minute Timeframe • All previous features kept")
 
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
 mode = st.sidebar.radio("Mode", ["Strict", "Active"], index=0)
@@ -176,7 +176,7 @@ try:
     plan = calculate_trade_plan(signal_data, capital, leverage, risk_pct)
     swing_high, swing_low = find_swing_points(df)
 
-    # ===== SIGNAL BADGE =====
+    # Signal Badge
     signal = signal_data["signal"]
     if signal == "LONG":
         bg, txt = "#00c853", "BUY"
@@ -194,11 +194,10 @@ try:
     <span style="color:gray; font-size:14px;"> &nbsp; Score: {signal_data['score']:+d}</span>
     """, unsafe_allow_html=True)
 
-    # ===== TWO SEPARATE SMALL BOXES =====
+    # Two separate small boxes
     col1, col2 = st.columns(2)
 
     with col1:
-        # Small Box 1: Swing Levels only
         st.markdown(f"""
         <div style="background:#1a1a1a; border:1px solid #333; border-radius:6px; padding:8px 10px; font-size:13px;">
             <b>Swing Levels</b><br>
@@ -208,7 +207,6 @@ try:
         """, unsafe_allow_html=True)
 
     with col2:
-        # Small Box 2: Trade Plan only
         if plan:
             st.markdown(f"""
             <div style="background:#1a1a1a; border:1px solid #333; border-radius:6px; padding:8px 10px; font-size:13px;">
@@ -226,8 +224,6 @@ try:
                 No active plan
             </div>
             """, unsafe_allow_html=True)
-
-    st.markdown("")
 
     with st.expander("More details & Reasons"):
         if plan:
@@ -251,7 +247,7 @@ try:
     fig.update_layout(height=460, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=20,b=20))
     st.plotly_chart(fig, use_container_width=True)
 
-    st.caption(f"Updated: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC")
+    st.caption(f"1-Minute Chart | Updated: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC")
 
 except Exception as e:
     st.error(str(e))
