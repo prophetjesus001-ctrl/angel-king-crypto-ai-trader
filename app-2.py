@@ -7,11 +7,11 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V6.0
-# Multi-Timeframe: 1m / 15m / 1h
+# 👑 ANGEL KING CRYPTO AI TRADER V6.1
+# Multi-Timeframe: 1m / 15m / 1h / 2h / 4h
 # ============================================================
 
-st.set_page_config(page_title="Angel King V6.0", page_icon="👑", layout="wide")
+st.set_page_config(page_title="Angel King V6.1", page_icon="👑", layout="wide")
 
 BINANCE_BASE = "https://api.binance.us"
 
@@ -155,12 +155,12 @@ def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
 # MAIN
 # ============================================================
 
-st.title("👑 Angel King V6.0")
-st.caption("Multi-Timeframe • 1m / 15m / 1h")
+st.title("👑 Angel King V6.1")
+st.caption("Multi-Timeframe • 1m / 15m / 1h / 2h / 4h")
 
-# Sidebar controls
+# Sidebar
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
-timeframe = st.sidebar.radio("Timeframe", ["1m", "15m", "1h"], index=0)
+timeframe = st.sidebar.radio("Timeframe", ["1m", "15m", "1h", "2h", "4h"], index=0)
 mode = st.sidebar.radio("Mode", ["Strict", "Active"], index=0)
 capital = st.sidebar.number_input("Capital", value=TRADE_CAPITAL, min_value=10.0)
 leverage = st.sidebar.slider("Leverage", 1, 20, LEVERAGE)
