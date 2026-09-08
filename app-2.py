@@ -7,11 +7,11 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V6.1
-# Multi-Timeframe: 1m / 15m / 1h / 2h / 4h
+# 👑 ANGEL KING CRYPTO AI TRADER V6.2
+# Multi-Timeframe + BUY/SELL Signal Counters
 # ============================================================
 
-st.set_page_config(page_title="Angel King V6.1", page_icon="👑", layout="wide")
+st.set_page_config(page_title="Angel King V6.2", page_icon="👑", layout="wide")
 
 BINANCE_BASE = "https://api.binance.us"
 
@@ -20,6 +20,14 @@ LEVERAGE = 10
 RISK_PERCENT = 1.0
 TP_ATR_MULTIPLIER = 2.5
 SL_ATR_MULTIPLIER = 1.4
+
+# Initialize counters in session state
+if "buy_count" not in st.session_state:
+    st.session_state.buy_count = 0
+if "sell_count" not in st.session_state:
+    st.session_state.sell_count = 0
+if "last_signal" not in st.session_state:
+    st.session_state.last_signal = "NEUTRAL"
 
 @st.cache_data(ttl=20)
 def get_klines(symbol="BTCUSDT", interval="1m", limit=300):
@@ -155,10 +163,9 @@ def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
 # MAIN
 # ============================================================
 
-st.title("👑 Angel King V6.1")
-st.caption("Multi-Timeframe • 1m / 15m / 1h / 2h / 4h")
+st.title("👑 Angel King V6.2")
+st.caption("Multi-Timeframe + Signal Counters")
 
-# Sidebar
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
 timeframe = st.sidebar.radio("Timeframe", ["1m", "15m", "1h", "2h", "4h"], index=0)
 mode = st.sidebar.radio("Mode", ["Strict", "Active"], index=0)
@@ -176,11 +183,26 @@ try:
     plan = calculate_trade_plan(signal_data, capital, leverage, risk_pct)
     swing_high, swing_low = find_swing_points(df)
 
+    # ---------- SIGNAL COUNTER LOGIC ----------
+    current_signal = signal_data["signal"]
+
+    if current_signal != st.session_state.last_signal:
+        if current_signal == "LONG":
+            st.session_state.buy_count += 1
+            if st.session_state.buy_count > 25:
+                st.session_state.buy_count = 0
+        elif current_signal == "SHORT":
+            st.session_state.sell_count += 1
+            if st.session_state.sell_count > 25:
+                st.session_state.sell_count = 0
+
+        st.session_state.last_signal = current_signal
+    # ------------------------------------------
+
     # Signal Badge
-    signal = signal_data["signal"]
-    if signal == "LONG":
+    if current_signal == "LONG":
         bg, txt = "#00c853", "BUY"
-    elif signal == "SHORT":
+    elif current_signal == "SHORT":
         bg, txt = "#ff1744", "SELL"
     else:
         bg, txt = "#616161", "NEUTRAL"
@@ -193,6 +215,26 @@ try:
     <span style="font-size:18px; font-weight:600;">${signal_data['close']:,.2f}</span>
     <span style="color:gray; font-size:14px;"> &nbsp; Score: {signal_data['score']:+d} | TF: {timeframe}</span>
     """, unsafe_allow_html=True)
+
+    # ---------- COUNTERS DISPLAY ----------
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f"""
+        <div style="background:#0a3d0a; border:1px solid #00c853; border-radius:6px; padding:8px; text-align:center;">
+            <b style="color:#00c853;">BUY Signals</b><br>
+            <span style="font-size:22px; color:white;">{st.session_state.buy_count}</span> / 25
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        st.markdown(f"""
+        <div style="background:#3d0a0a; border:1px solid #ff1744; border-radius:6px; padding:8px; text-align:center;">
+            <b style="color:#ff1744;">SELL Signals</b><br>
+            <span style="font-size:22px; color:white;">{st.session_state.sell_count}</span> / 25
+        </div>
+        """, unsafe_allow_html=True)
+    # --------------------------------------
+
+    st.markdown("")
 
     # Two separate small boxes
     col1, col2 = st.columns(2)
