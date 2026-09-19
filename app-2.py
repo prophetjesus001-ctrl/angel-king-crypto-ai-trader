@@ -7,11 +7,11 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 
 # ============================================================
-# 👑 ANGEL KING CRYPTO AI TRADER V6.2
-# Multi-Timeframe + BUY/SELL Signal Counters
+# 👑 ANGEL KING CRYPTO AI TRADER V6.3
+# Multi-Timeframe + Signal Counters + Monthly High/Low
 # ============================================================
 
-st.set_page_config(page_title="Angel King V6.2", page_icon="👑", layout="wide")
+st.set_page_config(page_title="Angel King V6.3", page_icon="👑", layout="wide")
 
 BINANCE_BASE = "https://api.binance.us"
 
@@ -21,7 +21,7 @@ RISK_PERCENT = 1.0
 TP_ATR_MULTIPLIER = 2.5
 SL_ATR_MULTIPLIER = 1.4
 
-# Initialize counters in session state
+# Initialize counters
 if "buy_count" not in st.session_state:
     st.session_state.buy_count = 0
 if "sell_count" not in st.session_state:
@@ -160,11 +160,38 @@ def calculate_trade_plan(signal_data, capital, leverage, risk_pct):
     }
 
 # ============================================================
-# MAIN
+# NEW: Monthly High & Low + Projection functions
 # ============================================================
 
-st.title("👑 Angel King V6.2")
-st.caption("Multi-Timeframe + Signal Counters")
+@st.cache_data(ttl=3600)
+def get_monthly_data(symbol="BTCUSDT"):
+    """Get daily data to calculate monthly highs and lows"""
+    url = f"{BINANCE_BASE}/api/v3/klines"
+    params = {"symbol": symbol, "interval": "1d", "limit": 400}
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    df = pd.DataFrame([{
+        "time": pd.to_datetime(x[0], unit="ms"),
+        "high": float(x[2]),
+        "low": float(x[3]),
+        "close": float(x[4])
+    } for x in data])
+    df["year_month"] = df["time"].dt.to_period("M")
+    return df
+
+def get_month_high_low(df, year_month):
+    month_data = df[df["year_month"] == year_month]
+    if month_data.empty:
+        return None, None
+    return month_data["high"].max(), month_data["low"].min()
+
+# ============================================================
+# MAIN APP
+# ============================================================
+
+st.title("👑 Angel King V6.3")
+st.caption("Multi-Timeframe + Signal Counters + Monthly High/Low")
 
 symbol = st.sidebar.selectbox("Symbol", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"])
 timeframe = st.sidebar.radio("Timeframe", ["1m", "15m", "1h", "2h", "4h"], index=0)
@@ -195,7 +222,6 @@ try:
             st.session_state.sell_count += 1
             if st.session_state.sell_count > 25:
                 st.session_state.sell_count = 0
-
         st.session_state.last_signal = current_signal
     # ------------------------------------------
 
@@ -216,7 +242,7 @@ try:
     <span style="color:gray; font-size:14px;"> &nbsp; Score: {signal_data['score']:+d} | TF: {timeframe}</span>
     """, unsafe_allow_html=True)
 
-    # ---------- COUNTERS DISPLAY ----------
+    # Counters
     c1, c2 = st.columns(2)
     with c1:
         st.markdown(f"""
@@ -232,13 +258,11 @@ try:
             <span style="font-size:22px; color:white;">{st.session_state.sell_count}</span> / 25
         </div>
         """, unsafe_allow_html=True)
-    # --------------------------------------
 
     st.markdown("")
 
-    # Two separate small boxes
+    # Swing + Trade Plan boxes
     col1, col2 = st.columns(2)
-
     with col1:
         st.markdown(f"""
         <div style="background:#1a1a1a; border:1px solid #333; border-radius:6px; padding:8px 10px; font-size:13px;">
@@ -247,7 +271,6 @@ try:
             Low: &nbsp;<b>{f'${swing_low:,.1f}' if swing_low else 'N/A'}</b>
         </div>
         """, unsafe_allow_html=True)
-
     with col2:
         if plan:
             st.markdown(f"""
@@ -280,16 +303,74 @@ try:
     )])
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema21"], name="EMA21", line=dict(width=1.5)))
     fig.add_trace(go.Scatter(x=df["time"], y=df["ema50"], name="EMA50", line=dict(width=2)))
-
     if swing_high:
         fig.add_hline(y=swing_high, line_dash="dot", line_color="red", annotation_text="High")
     if swing_low:
         fig.add_hline(y=swing_low, line_dash="dot", line_color="green", annotation_text="Low")
-
     fig.update_layout(height=460, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(t=20,b=20))
     st.plotly_chart(fig, use_container_width=True)
 
     st.caption(f"Timeframe: {timeframe} | Updated: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC")
+
+    # ============================================================
+    # NEW SECTION - MONTHLY HIGH & LOW + PROJECTION
+    # ============================================================
+    st.markdown("---")
+    st.subheader("Monthly High & Low")
+
+    try:
+        monthly_df = get_monthly_data(symbol)
+        available_months = sorted(monthly_df["year_month"].unique(), reverse=True)
+
+        month_options = ["Select Month"] + [str(m) for m in available_months]
+        selected_month = st.selectbox("Select Month", month_options, index=0)
+
+        if selected_month != "Select Month":
+            high, low = get_month_high_low(monthly_df, selected_month)
+            if high and low:
+                st.markdown(f"""
+                <div style="background:#1a1a1a; border:1px solid #444; border-radius:8px; padding:12px; margin-top:8px;">
+                    <b>{selected_month}</b><br><br>
+                    Highest Price : <b style="color:#00c853;">${high:,.2f}</b><br>
+                    Lowest Price  : <b style="color:#ff1744;">${low:,.2f}</b>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info("No data available for this month.")
+        else:
+            st.caption("Select a month to view Highest and Lowest price.")
+
+        # This Month Projection
+        st.markdown("")
+        st.subheader("This Month Projection")
+
+        current_price = signal_data["close"]
+        # Simple projection based on average range of last 6 months
+        recent_months = available_months[:6]
+        ranges = []
+        for m in recent_months:
+            h, l = get_month_high_low(monthly_df, m)
+            if h and l:
+                ranges.append(h - l)
+
+        if ranges:
+            avg_range = sum(ranges) / len(ranges)
+            possible_high = current_price + (avg_range * 0.6)
+            possible_low = current_price - (avg_range * 0.6)
+
+            st.markdown(f"""
+            <div style="background:#1a1a1a; border:1px solid #444; border-radius:8px; padding:12px;">
+                Current Price : <b>${current_price:,.2f}</b><br><br>
+                Possible High : <b style="color:#00c853;">${possible_high:,.0f} – ${possible_high*1.03:,.0f}</b><br>
+                Possible Low  : <b style="color:#ff1744;">${possible_low*0.97:,.0f} – ${possible_low:,.0f}</b><br><br>
+                <span style="color:gray; font-size:12px;">Based on average monthly range of the last 6 months. This is only an estimated zone, not a guarantee.</span>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.info("Not enough data for projection.")
+
+    except Exception as e:
+        st.warning("Monthly data temporarily unavailable.")
 
 except Exception as e:
     st.error(str(e))
